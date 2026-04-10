@@ -1,0 +1,43 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependency directories
+node_modules/
+jspm_packages/
+APP会社/node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+APP会社/dist/
+
+# Local env files
+*.local
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project specific
+backup/
+inject_*.txt
+data_url.txt
+*.png
+!rich_menu_background.png
+!rich_menu_final_2500x1686.png
+!APP会社/src/assets/staff/*.png
+
+# Editor files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.sln
