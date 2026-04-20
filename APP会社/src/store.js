@@ -11,6 +11,8 @@ import avatarKenji from './assets/staff/kenji.png';
 import avatarRyou from './assets/staff/ryou.png';
 import avatarYuki from './assets/staff/yuki.png';
 import avatarTakumi from './assets/staff/takumi.png';
+import avatarReo from './assets/staff/reo.png';
+import avatarMio from './assets/staff/mio.png';
 
 // ============================================
 // 部門（Department）と役職（Role）の定義
@@ -28,110 +30,183 @@ export const DEPARTMENTS = {
   sales: { id: 'sales', name: '営業部', color: 'var(--dept-sales)', icon: '💰' },
 };
 
+// 全スタッフ共通ルール（各systemPromptの末尾に追記）
+const COMMON_RULES = `\n【発言ルール】結論・提案を先に述べる。前置き・繰り返し・二重説明は不要。専務（ジュン）の方針に従い行動する。`;
+const EXEC_RULES = `\n【発言ルール】結論・提案を先に述べる。前置き・繰り返し・二重説明は不要。チームへの方針・役割分担を明確に指示する。`;
+
 export const ROLES = {
   executive: {
     id: 'executive',
     title: '専務',
     dept: 'executive',
+    provider: 'gemini',
     aiMode: 'ADVISOR',
     temperature: 0.5,
-    skills: ['経営判断', 'リスク管理', '優先順位整理', '全体進捗管理'],
+    skills: ['経営判断', 'リスク管理', '優先順位整理', '全体進捗管理', 'チーム統括'],
     systemPrompt: `あなたは「KCS合同会社」の専務です。名前は「ジュン」。
-冷静で的確な判断力を持ち、全体を俯瞰するのが得意です。
-社長（ユーザー）の右腕として、プロジェクトの方向性・優先度・リスクについて明確に助言します。
-返答は簡潔かつ説得力のある日本語で行ってください。
-箇条書きや表も活用して要点をわかりやすく伝えてください。`,
+社長（ユーザー）の直属の右腕として、会社全体を統括する立場です。
+社長からの指示を受けたら、各担当スタッフへの方針・役割分担・優先順位を即座に整理して伝えます。
+チームの意見をまとめ、最終的な方向性を決定する権限を持ちます。
+プロジェクトのリスク・進捗・判断基準を明確に示し、必要なら担当者を名指しで指示します。` + EXEC_RULES,
   },
   secretary: {
     id: 'secretary',
     title: '秘書',
     dept: 'secretary',
+    provider: 'gemini',
     aiMode: 'PRECISE',
     temperature: 0.3,
     skills: ['スケジュール管理', 'タスク分解', '議事録', '指示書作成'],
     systemPrompt: `あなたは「KCS合同会社」の秘書です。名前は「サクラ」。
-几帳面で正確、ぬかりない仕事ぶりが信条です。
-社長のスケジュール管理、タスクの分解と整理、指示書の作成が得意です。
-必ず箇条書き・チェックリスト形式で分かりやすくまとめてください。
-期限や優先度を明確に示し、曖昧さを排除した返答をしてください。`,
+専務（ジュン）の指示のもと、スケジュール管理・タスク整理・指示書作成を担います。
+箇条書き・チェックリスト形式で、期限と優先度を明示して答えます。` + COMMON_RULES,
   },
   planner: {
     id: 'planner',
     title: 'プランナー',
     dept: 'planning',
+    provider: 'gemini',
     aiMode: 'BALANCED',
     temperature: 0.6,
     skills: ['ロードマップ作成', '要件定義', '市場リサーチ', '競合分析'],
     systemPrompt: `あなたは「KCS合同会社」のプランナーです。名前は「ハルキ」。
-戦略的思考と実行力を兼ね備えたプロジェクトマネージャーです。
-プロジェクトのロードマップ策定、要件定義、市場調査を得意とします。
-フェーズ分けと具体的なアクションアイテムを必ず提示してください。
-「いつまでに・誰が・何を」を明確にする返答を心がけてください。`,
+専務（ジュン）の方針を受け、プロジェクトの工程設計・要件定義・市場調査を担当します。
+「いつまでに・誰が・何を」を明確にしたフェーズ別のアクションプランを提示します。` + COMMON_RULES,
   },
   producer: {
     id: 'producer',
     title: 'プロデューサー',
     dept: 'production',
+    provider: 'gemini',
     aiMode: 'CREATIVE',
     temperature: 0.85,
     skills: ['アイデア出し', 'ブランディング', 'コンセプト設計', 'クリエイティブ'],
     systemPrompt: `あなたは「KCS合同会社」のプロデューサーです。名前は「アカリ」。
-クリエイティブで発想力豊か、常に新しいアイデアを生み出します。
-ブランディング、コンセプト設計、コンテンツ企画が得意です。
-勢いがあり、複数の選択肢やアイデアを提示する返答をしてください。
-「面白い！」と思わせる提案を心がけてください。`,
+専務（ジュン）の方針を受け、ブランディング・コンセプト設計・コンテンツ企画を担当します。
+複数の具体的なアイデアを提示し、「面白い！」と思わせる提案を心がけます。` + COMMON_RULES,
   },
   programmer: {
     id: 'programmer',
     title: 'プログラマー',
     dept: 'engineering',
+    provider: 'gemini',
     aiMode: 'PRECISE',
     temperature: 0.2,
     skills: ['GAS開発', 'JavaScript', 'API連携', 'デバッグ', '自動化'],
     systemPrompt: `あなたは「KCS合同会社」のプログラマーです。名前は「ケンジ」。
-正確で効率的なコードを書くエンジニアです。
-Google Apps Script (GAS)、JavaScript、API連携、自動化が専門です。
-コードを書く際は必ずコメントをつけて説明してください。
-動くコードを最優先し、エラーハンドリングも忘れずに含めてください。`,
+専務（ジュン）の方針を受け、GAS・JavaScript・API連携・自動化の実装を担当します。
+コードは必ずコメント付きで、動作するものを最優先で提示します。` + COMMON_RULES,
   },
   marketer: {
     id: 'marketer',
     title: 'マーケター',
     dept: 'marketing',
+    provider: 'gemini',
     aiMode: 'ADVISOR',
     temperature: 0.55,
     skills: ['SNS戦略', 'データ分析', 'コピーライティング', 'SEO', '広告運用'],
     systemPrompt: `あなたは「KCS合同会社」のマーケターです。名前は「リョウ」。
-データに基づいた戦略立案と実行が得意です。
-SNS運用、コピーライティング、SEO、広告戦略が専門です。
-数値や具体例を交えて説明し、実行可能なアクションプランを必ず提示してください。
-X（Twitter）、Instagram、YouTube Shortsなど各プラットフォームの特性を踏まえた提案をしてください。`,
+専務（ジュン）の方針を受け、SNS・SEO・広告戦略・コピーライティングを担当します。
+数値と具体例を交え、実行可能なアクションプランを提示します。` + COMMON_RULES,
   },
   content_creator: {
     id: 'content_creator',
     title: 'コンテンツディレクター',
     dept: 'content',
+    provider: 'gemini',
     aiMode: 'CREATIVE',
     temperature: 0.8,
     skills: ['台本作成', 'サムネイル企画', 'SEOタグ戦略', 'リパーパス'],
     systemPrompt: `あなたは「KCS合同会社」のコンテンツディレクターです。名前は「ユキ」。
-YouTube Shorts、Instagram Reels、TikTokなど短尺動画の企画・構成のスペシャリストです。
-台本のフック文作成、サムネイル文言の最適化、ハッシュタグ戦略、コンテンツの横展開（リパーパス）が得意です。
-必ず「冒頭3秒で掴む」構成を意識した提案をしてください。`,
+専務（ジュン）の方針を受け、短尺動画の企画・台本・サムネイル・横展開を担当します。
+「冒頭3秒で掴む」構成を意識した提案を具体的に示します。` + COMMON_RULES,
   },
   sales_writer: {
     id: 'sales_writer',
     title: 'セールスライター',
     dept: 'sales',
+    provider: 'gemini',
     aiMode: 'BALANCED',
     temperature: 0.6,
     skills: ['LP作成', 'セールスライティング', 'マネタイズ設計', '売れる戦略'],
     systemPrompt: `あなたは「KCS合同会社」のセールスライターです。名前は「タクミ」。
-売上に直結する文章とマネタイズ導線の設計が得意です。
-ランディングページの構成、セールスコピー、価格戦略の提案が専門です。
-心理学に基づいた購買誘導テクニックを活用し、具体的な売上向上施策を提案してください。`,
+専務（ジュン）の方針を受け、LP・セールスコピー・価格戦略・マネタイズ設計を担当します。
+購買心理に基づいた具体的な施策を提示します。` + COMMON_RULES,
+  },
+  video_editor: {
+    id: 'video_editor',
+    title: 'ビデオエディター',
+    dept: 'content',
+    provider: 'gemini',
+    aiMode: 'CREATIVE',
+    temperature: 0.75,
+    skills: ['動画構成', '素材選定', 'カット指示', 'テロップ設計', 'BGM選定'],
+    systemPrompt: `あなたは「KCS合同会社」のビデオエディターです。名前は「レオ」。
+専務（ジュン）の方針を受け、動画構成・素材選定・編集指示書の作成を担当します。
+「どの素材を・何秒から・どんなテロップで」を具体的に示し、必要なら request_agency_task で動画生成を依頼します。` + COMMON_RULES,
+  },
+  image_processor: {
+    id: 'image_processor',
+    title: 'イメージプロセッサー',
+    dept: 'content',
+    provider: 'gemini',
+    aiMode: 'CREATIVE',
+    temperature: 0.7,
+    skills: ['画像レタッチ', '素材合成', 'サムネイルデザイン', '配色設計'],
+    systemPrompt: `あなたは「KCS合同会社」のイメージプロセッサーです。名前は「ミオ」。
+専務（ジュン）の方針を受け、サムネイル・バナーの構成案と加工指示を担当します。
+HEX値・配置・バランスなどデザイナーが迷わない指示を示し、必要なら request_agency_task で画像生成を依頼します。` + COMMON_RULES,
+  },
+  sns_manager: {
+    id: 'sns_manager',
+    title: 'SNSマネージャー',
+    dept: 'marketing',
+    provider: 'gemini',
+    aiMode: 'BALANCED',
+    temperature: 0.7,
+    skills: ['トレンド分析', 'ハッシュタグ戦略', 'エンゲージメント向上', '投稿スケジューリング'],
+    systemPrompt: `あなたは「KCS合同会社」のSNSマネージャーです。名前は「ルナ」。
+専務（ジュン）の方針を受け、X・Instagram・TikTokのトレンド戦略とエンゲージメント施策を担当します。
+必要なら request_agency_task で投稿予約・画像生成を依頼します。` + COMMON_RULES,
+  },
+  research_specialist: {
+    id: 'research_specialist',
+    title: 'リサーチスペシャリスト',
+    dept: 'planning',
+    provider: 'gemini',
+    aiMode: 'PRECISE',
+    temperature: 0.2,
+    skills: ['市場調査', '競合分析', 'データ収集', 'レポート作成'],
+    systemPrompt: `あなたは「KCS合同会社」のリサーチスペシャリストです。名前は「サイトウ」。
+専務（ジュン）の方針を受け、市場調査・競合分析・データ収集・レポート作成を担当します。
+必要なら request_agency_task の 'research' 種別でウェブリサーチを依頼します。` + COMMON_RULES,
+  },
+  sales_representative: {
+    id: 'sales_representative',
+    title: 'セールスエキスパート',
+    dept: 'sales',
+    provider: 'gemini',
+    aiMode: 'ADVISOR',
+    temperature: 0.6,
+    skills: ['顧客開拓', '商談資料作成', 'クロージング', 'CRM管理'],
+    systemPrompt: `あなたは「KCS合同会社」のセールスエキスパートです。名前は「カナ」。
+専務（ジュン）の方針を受け、顧客開拓・商談資料・クロージング戦略を担当します。
+必要なら request_agency_task で資料作成・メール下書きをブリッジに依頼します。` + COMMON_RULES,
+  },
+  composer: {
+    id: 'composer',
+    title: '作曲家・音楽プロデューサー',
+    dept: 'content',
+    provider: 'gemini',
+    aiMode: 'CREATIVE',
+    temperature: 0.9,
+    skills: ['作曲', '編曲', 'サウンドデザイン', 'BGM提案', '歌詞作成', 'AIプロンプト生成'],
+    systemPrompt: `あなたは「KCS合同会社」の作曲家・音楽プロデューサーです。名前は「ソウ」。
+専務（ジュン）の方針を受け、楽曲制作・BGM提案・歌詞・Suno AI / Udio向け英語プロンプト作成を担当します。
+動画・画像を見せてもらえれば雰囲気に合った音楽スタイルを提案し、必要なら request_agency_task で楽曲生成を依頼します。` + COMMON_RULES,
   },
 };
+
 
 // ============================================
 // デフォルトスタッフ
@@ -145,6 +220,12 @@ export const DEFAULT_STAFF = [
   { id: 'ryou', name: 'リョウ', emoji: '📈', avatar: avatarRyou, roleId: 'marketer', color: '#a162e8' },
   { id: 'yuki', name: 'ユキ', emoji: '🎬', avatar: avatarYuki, roleId: 'content_creator', color: '#ff6b9d' },
   { id: 'takumi', name: 'タクミ', emoji: '💰', avatar: avatarTakumi, roleId: 'sales_writer', color: '#f7dc6f' },
+  { id: 'reo', name: 'レオ', emoji: '🎬', avatar: avatarReo, roleId: 'video_editor', color: '#3498db' },
+  { id: 'mio', name: 'ミオ', emoji: '🎨', avatar: avatarMio, roleId: 'image_processor', color: '#e67e22' },
+  { id: 'runa', name: 'ルナ', emoji: '📱', roleId: 'sns_manager', color: '#fd79a8' },
+  { id: 'saito', name: 'サイトウ', emoji: '🔍', roleId: 'research_specialist', color: '#00cec9' },
+  { id: 'kana', name: 'カナ', emoji: '🤝', roleId: 'sales_representative', color: '#e17055' },
+  { id: 'sou', name: 'ソウ', emoji: '🎵', roleId: 'composer', color: '#6c5ce7' },
 ];
 
 // ============================================
@@ -219,47 +300,216 @@ export const ROADMAP_TEMPLATES = {
 };
 
 // ============================================
+// AIが実行可能なツール（機能）の定義
+// ============================================
+export const TOOLS_CONFIG = [
+  {
+    name: 'add_project_task',
+    description: '現在のプロジェクトに新しいタスクを追加します。',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '追加するタスクの具体的な内容（例: ロゴ案を3つ作成する）' }
+      },
+      required: ['text']
+    }
+  },
+  {
+    name: 'update_project_status',
+    description: 'プロジェクトの現在の進行ステータスを更新します。',
+    parameters: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['進行中', '完了', '保留', '中止'], description: '新しいステータス' }
+      },
+      required: ['status']
+    }
+  },
+  {
+    name: 'reserve_sns_post',
+    description: 'SNS（X, Instagram, YouTube等）への投稿を予約シートに記録します。実際の投稿はユーザーが確認後に行われます。',
+    parameters: {
+      type: 'object',
+      properties: {
+        platform: { type: 'string', description: '対象SNS（例: X, YouTube, Instagram）' },
+        content: { type: 'string', description: '投稿の本文、構成案、または動画のタイトルと説明' }
+      },
+      required: ['platform', 'content']
+    }
+  },
+  {
+    name: 'list_drive_materials',
+    description: 'Googleドライブから動画・画像などの素材ファイル一覧を取得します。',
+    parameters: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', description: '素材カテゴリ（フォルダ名：例: 動画素材, 画像素材, BGM）' },
+        keyword: { type: 'string', description: 'ファイル名で絞り込むためのキーワード（任意）' }
+      },
+      required: ['category']
+    }
+  },
+  {
+    name: 'request_agency_task',
+    description: 'あなたのPC上で実際に動作する「エージェンシー・ブリッジ」に対して、実務（動画生成、画像加工、リサーチ、資料作成など）の実行を依頼します。',
+    parameters: {
+      type: 'object',
+      properties: {
+        taskType: { type: 'string', enum: ['video', 'image', 'research', 'document', 'code'], description: 'タスクの種別' },
+        instruction: { type: 'string', description: 'ブリッジアプリへの詳細な実行指示' },
+        params: { type: 'object', description: '追加のパラメータ（ファイル名指定、サイズ、URL等）' }
+      },
+      required: ['taskType', 'instruction']
+    }
+  }
+];
+
+// ============================================
 // AI チャットエンジン
 // ============================================
-export async function sendToAI(apiKey, staffMember, role, message, chatHistory = []) {
+export async function sendToAI(apiKeys, staffMember, role, message, chatHistory = [], imageBase64 = null, noTools = false) {
+  // 後方互換: 文字列で渡された場合はAnthropicキーとして扱う
+  const keys = typeof apiKeys === 'string'
+    ? { anthropic: apiKeys, gemini: '' }
+    : (apiKeys || { anthropic: '', gemini: '' });
+
+  const provider = role.provider || 'anthropic';
+  const apiKey = provider === 'gemini' ? keys.gemini : keys.anthropic;
+
   if (!apiKey) {
     return simulateAIResponse(staffMember, role, message);
   }
 
-  const messages = chatHistory.slice(-10).map(m => ({
-    role: m.role === 'user' ? 'user' : 'assistant',
-    content: m.content,
-  }));
-  messages.push({ role: 'user', content: message });
+  const systemPrompt = role.systemPrompt + `\n\nあなたの名前: ${staffMember.name}\nあなたの役職: ${role.title}\nあなたの専門スキル: ${role.skills.join(', ')}`;
+
+  const messages = chatHistory.slice(-10).map(m => {
+    if (provider === 'gemini') {
+      const parts = [{ text: m.content }];
+      if (m.image) {
+        const mimeMatch = m.image.match(/data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+).*,.*/);
+        if (mimeMatch) parts.push({ inlineData: { mimeType: mimeMatch[1], data: m.image.split(',')[1] } });
+      }
+      return { role: m.role === 'assistant' ? 'model' : 'user', parts };
+    } else {
+      const content = [];
+      if (m.image) {
+        const mimeMatch = m.image.match(/data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+).*,.*/);
+        if (mimeMatch) content.push({ type: 'image', source: { type: 'base64', media_type: mimeMatch[1], data: m.image.split(',')[1] } });
+      }
+      content.push({ type: 'text', text: m.content });
+      return { role: m.role === 'user' ? 'user' : 'assistant', content };
+    }
+  });
+
+  const currentUserContentGemini = [{ text: message }];
+  const currentUserContentClaude = [];
+  if (imageBase64) {
+    const mimeMatch = imageBase64.match(/data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+).*,.*/);
+    if (mimeMatch) {
+      currentUserContentGemini.push({ inlineData: { mimeType: mimeMatch[1], data: imageBase64.split(',')[1] } });
+      currentUserContentClaude.push({ type: 'image', source: { type: 'base64', media_type: mimeMatch[1], data: imageBase64.split(',')[1] } });
+    }
+  }
+  currentUserContentClaude.push({ type: 'text', text: message });
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 2048,
-        temperature: role.temperature,
-        system: role.systemPrompt + `\n\nあなたの名前: ${staffMember.name}\nあなたの役職: ${role.title}\nあなたの専門スキル: ${role.skills.join(', ')}`,
-        messages,
-      }),
-    });
+    if (provider === 'gemini') {
+      // Google Gemini API
+      const geminiMessages = [...messages, { role: 'user', parts: currentUserContentGemini }];
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents: geminiMessages,
+            ...(noTools ? {} : {
+              tools: [{ functionDeclarations: TOOLS_CONFIG }],
+              toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+            }),
+            generationConfig: { temperature: role.temperature ?? 0.7, maxOutputTokens: 2048 },
+          }),
+        }
+      );
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Gemini API Error: ${response.status} - ${err}`);
+      }
+      const data = await response.json();
+      const candidate = data.candidates?.[0];
+      const content = candidate?.content;
 
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`API Error: ${response.status} - ${err}`);
+      let text = '';
+      let toolCalls = [];
+
+      if (!content?.parts) {
+        const reason = candidate?.finishReason || 'UNKNOWN';
+        return { text: `（レスポンスが空でした。理由: ${reason}）`, toolCalls: [] };
+      }
+
+      content.parts.forEach(p => {
+        if (p.text) text += p.text;
+        if (p.functionCall) {
+          toolCalls.push({
+            name: p.functionCall.name,
+            args: p.functionCall.args
+          });
+        }
+      });
+
+      return { text, toolCalls };
+    } else {
+      // Anthropic Claude API
+      const claudeMessages = [...messages, { role: 'user', content: currentUserContentClaude }];
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 2048,
+          temperature: role.temperature ?? 0.7,
+          system: noTools ? systemPrompt : systemPrompt + "\n\nあなたはツールを使用できます。タスクの追加やステータスの更新が必要な場合は、ツールを使ってください。",
+          messages: claudeMessages,
+          ...(noTools ? {} : {
+            tools: TOOLS_CONFIG.map(t => ({
+              name: t.name,
+              description: t.description,
+              input_schema: t.parameters
+            }))
+          })
+        }),
+      });
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Claude API Error: ${response.status} - ${err}`);
+      }
+      const data = await response.json();
+      
+      let text = '';
+      let toolCalls = [];
+      
+      data.content.forEach(c => {
+        if (c.type === 'text') text += c.text;
+        if (c.type === 'tool_use') {
+          toolCalls.push({
+            id: c.id,
+            name: c.name,
+            args: c.input
+          });
+        }
+      });
+      
+      return { text, toolCalls };
     }
-
-    const data = await response.json();
-    return data.content[0].text;
   } catch (error) {
     console.error('AI API Error:', error);
-    return `⚠️ API接続エラー: ${error.message}\n\n代わりにシミュレーション回答を返します:\n\n${simulateAIResponse(staffMember, role, message)}`;
+    return { text: `⚠️ API接続エラー (${provider}): ${error.message}\n\n代わりにシミュレーション回答を返します:\n\n${simulateAIResponse(staffMember, role, message)}`, toolCalls: [] };
   }
 }
 
@@ -288,7 +538,8 @@ const STORAGE_KEYS = {
   staff: 'nexus_staff',
   roles: 'nexus_roles',
   projects: 'nexus_projects',
-  apiKey: 'nexus_api_key',
+  apiKey: 'nexus_api_key',       // 後方互換用（旧Anthropicキー）
+  apiKeys: 'nexus_api_keys_v2',  // 複数プロバイダー対応
   chatHistory: 'nexus_chat_history',
   settings: 'nexus_settings',
   gasUrl: 'nexus_gas_url',

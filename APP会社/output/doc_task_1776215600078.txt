@@ -1,0 +1,5 @@
+--- KCS AI DOCUMENT ---
+
+Suno AI / Udioで使用する、嵐「Happiness」のHI-STANDARD風パンクロックアレンジのデモ音源生成用英語プロンプトを作成してください。内容は、ジャンル（Melodic Punk Rock / J-Pop Punk Cover）、ムード（Uplifting, fast-paced, powerful, anthemic）、楽器構成（Aggressively distorted electric guitars, driving bass, thunderous punk rock drums, energetic male vocals, gang vocals/harmonies）、スタイルリファレンス（HI-STANDARD covering Arashi's 'Happiness'）を含めてください。
+
+作成日: 2026/4/16 13:00:52

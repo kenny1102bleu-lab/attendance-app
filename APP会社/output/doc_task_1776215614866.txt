@@ -1,0 +1,19 @@
+--- KCS AI DOCUMENT ---
+
+Suno AI / Udioで音楽生成するための英語プロンプトを作成してください。
+
+**楽曲:** 嵐「Happiness」
+**アレンジの方向性:** HI-STANDARDをベースとしたメロディックパンクアレンジ。
+**具体的な音楽的要素:**
+*   **ジャンル:** Melodic Punk Rock, J-Pop Cover
+*   **テンポ:** Fast (BPM 180-200)
+*   **ギター:** Distorted, powerful power chords, catchy melodic riffs, short and technical guitar solo, bright and energetic tone.
+*   **ベース:** Driving, melodic basslines, tight and punchy.
+*   **ドラム:** Fast 8-beat/16-beat, strong snare and kick, energetic fills.
+*   **ボーカル:** Energetic, powerful, bright and emotional, singalong chorus with thick harmonies.
+*   **全体的な雰囲気:** Positive, uplifting, high-energy, live performance feel, blending the original J-Pop melody with aggressive punk rock elements.
+*   **構成:** Intro, Verse, Pre-Chorus, Chorus, Verse, Pre-Chorus, Chorus, Guitar Solo, Bridge, Chorus, Outro.
+
+これらの要素を盛り込んだ、Suno AI / Udioが理解しやすい英語プロンプトを生成してください。
+
+作成日: 2026/4/16 13:01:03
