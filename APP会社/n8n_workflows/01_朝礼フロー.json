@@ -1,0 +1,36 @@
+{
+  "name": "KCS_Phase2_朝礼フロー",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 24, "triggerAtHour": 9 }] }
+      },
+      "name": "毎朝9時トリガー",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.KCS_GAS_URL}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [{ "name": "action", "value": "morning_briefing" }]
+        },
+        "options": {}
+      },
+      "name": "GAS_朝礼ブリーフィング実行",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [500, 300]
+    }
+  ],
+  "connections": {
+    "毎朝9時トリガー": { "main": [[{ "node": "GAS_朝礼ブリーフィング実行", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "_comment": "GAS_KCS合同会社_Backend.gs の morningBriefing() を呼び出す。GASが Discord送信 + Obsidian保存 + GitHub保存を行う。環境変数 KCS_GAS_URL にGAS WebApp URLを設定すること。"
+}

@@ -1,0 +1,98 @@
+{
+  "name": "KCS_08_エラーメール監視＆自己修復通知",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "minutes", "minutesInterval": 10 }
+          ]
+        }
+      },
+      "name": "⏰ 10分毎トリガー",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [120, 300],
+      "_comment": "GASの5分毎スキャンと並行して、n8nでも10分毎に手動スキャンAPIを叩くことで二重監視を実現"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.KCS_GAS_URL}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"action\": \"check_system_emails\"}",
+        "options": {}
+      },
+      "name": "📧 GAS：システムメールスキャン実行",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [340, 300],
+      "_comment": "GASのcheckSystemEmails関数を外部からトリガー。GASがGmailをスキャン→Gemini解析→Discord通知→自己修復を実行"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.ok}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "スキャン成功かを確認",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [560, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8nのシステムログに実行結果を記録\nconsole.log('[n8n] システムメールスキャン完了:', new Date().toISOString());\nreturn [{ json: { status: 'ok', message: 'スキャン完了', executedAt: new Date().toISOString() } }];"
+      },
+      "name": "✅ 成功ログ",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [780, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.KCS_GAS_URL}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ action: 'discord_message', text: '⚠️ **n8n自動監視システム警告**\\n\\nGASのシステムメールスキャンAPIの呼び出しに失敗しました。\\n\\nエラー詳細: ' + JSON.stringify($json), channelId: $env.DISCORD_ERROR_CHANNEL_ID || '', author_username: 'n8nエラー監視Bot' }) }}",
+        "options": {}
+      },
+      "name": "❌ エラーをDiscordに通知",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [780, 400],
+      "_comment": "GASへのAPI呼び出し自体が失敗した場合は、Discordに警告を送信"
+    }
+  ],
+  "connections": {
+    "⏰ 10分毎トリガー": {
+      "main": [[{ "node": "📧 GAS：システムメールスキャン実行", "type": "main", "index": 0 }]]
+    },
+    "📧 GAS：システムメールスキャン実行": {
+      "main": [[{ "node": "スキャン成功かを確認", "type": "main", "index": 0 }]]
+    },
+    "スキャン成功かを確認": {
+      "main": [
+        [{ "node": "✅ 成功ログ", "type": "main", "index": 0 }],
+        [{ "node": "❌ エラーをDiscordに通知", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "_comment": "GASの5分毎メールスキャンを補完するn8nワークフロー。10分毎にGASのcheck_system_emailsを呼び出し、GASが落ちている場合もn8nがDiscordへ通知する二重監視システム。"
+}

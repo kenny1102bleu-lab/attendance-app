@@ -1,0 +1,56 @@
+{
+  "name": "KCS_Phase5_スクショ解釈_ナレッジ保存",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerOn": "message",
+        "options": {}
+      },
+      "name": "Discord_Knowledge監視",
+      "type": "n8n-nodes-base.discordTrigger",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "credentials": { "discordBotApi": { "id": "1", "name": "KCS Discord Bot" } },
+      "_comment": "#knowledgeチャンネルを監視"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.attachments.length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ]
+        }
+      },
+      "name": "画像添付フィルター",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.KCS_GAS_URL}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"action\": \"discord_message\",\n  \"channelId\": \"{{ $json.channel_id }}\",\n  \"text\": \"[画像]\",\n  \"author\": \"{{ $json.author.username }}\",\n  \"messageId\": \"{{ $json.id }}\",\n  \"imageUrl\": \"{{ $json.attachments[0].url }}\"\n}",
+        "options": {}
+      },
+      "name": "GAS_スクショ解釈",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [800, 200],
+      "_comment": "GASのhandleKnowledgeImage()がGemini Visionで解釈 → Discord返信 + Obsidian保存 + GitHub保存"
+    }
+  ],
+  "connections": {
+    "Discord_Knowledge監視": { "main": [[{ "node": "画像添付フィルター", "type": "main", "index": 0 }]] },
+    "画像添付フィルター": { "main": [[{ "node": "GAS_スクショ解釈", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

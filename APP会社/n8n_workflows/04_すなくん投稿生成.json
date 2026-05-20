@@ -1,0 +1,43 @@
+{
+  "name": "KCS_Phase4_すなくん投稿生成",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "hours", "hoursInterval": 24, "triggerAtHour": 12 },
+            { "field": "hours", "hoursInterval": 24, "triggerAtHour": 19 },
+            { "field": "hours", "hoursInterval": 24, "triggerAtHour": 22 }
+          ]
+        }
+      },
+      "name": "1日3回スケジュール",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "_comment": "推奨投稿時間: 12:00 / 19:00 / 22:00"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.KCS_GAS_URL}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"action\": \"generate_sunakkun_post\",\n  \"theme\": \"ガジェット\",\n  \"platform\": \"X\"\n}",
+        "options": {}
+      },
+      "name": "GAS_すなくん投稿生成",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [500, 300],
+      "_comment": "GASがClaude Haikuで投稿文を生成 → 楽天トレンド商品を参照 → #affiliateチャンネルに通知"
+    }
+  ],
+  "connections": {
+    "1日3回スケジュール": { "main": [[{ "node": "GAS_すなくん投稿生成", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "_comment": "RAKUTEN_APP_ID が設定されていれば楽天トレンドを参照。未設定でもテーマベースで生成。3回に1回 @HAL の紹介を含む。"
+}

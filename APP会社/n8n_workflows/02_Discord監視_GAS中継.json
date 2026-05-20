@@ -1,0 +1,68 @@
+{
+  "name": "KCS_Phase1_Discord監視_GAS中継",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerOn": "message",
+        "options": {}
+      },
+      "name": "Discord_メッセージ受信",
+      "type": "n8n-nodes-base.discordTrigger",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "credentials": { "discordBotApi": { "id": "1", "name": "KCS Discord Bot" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.author.bot }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "notEquals" }
+            },
+            {
+              "leftValue": "={{ $json.content }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Botメッセージ除外フィルター",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.KCS_GAS_URL}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"action\": \"discord_message\",\n  \"channelId\": \"{{ $json.channel_id }}\",\n  \"text\": \"{{ $json.content }}\",\n  \"author\": \"{{ $json.author.username }}\",\n  \"messageId\": \"{{ $json.id }}\"\n}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": true
+            }
+          }
+        }
+      },
+      "name": "GAS_メッセージ転送",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [800, 200]
+    }
+  ],
+  "connections": {
+    "Discord_メッセージ受信": { "main": [[{ "node": "Botメッセージ除外フィルター", "type": "main", "index": 0 }]] },
+    "Botメッセージ除外フィルター": { "main": [[{ "node": "GAS_メッセージ転送", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "_comment": "Make.com の MAKE_DISCORD_SETUP.md と同等のワークフロー。n8n版。GASが !コマンド解析 + Gemini回答 + Discord Webhook返信を行う。"
+}

@@ -1,0 +1,153 @@
+{
+  "name": "KCS_07_アフィリエイト自動リサーチ＆トレンド監視",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "hours", "hoursInterval": 6, "triggerAtHour": 6 },
+            { "field": "hours", "hoursInterval": 6, "triggerAtHour": 12 },
+            { "field": "hours", "hoursInterval": 6, "triggerAtHour": 18 },
+            { "field": "hours", "hoursInterval": 6, "triggerAtHour": 23 }
+          ]
+        }
+      },
+      "name": "⏰ 6時間毎トリガー",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [120, 300],
+      "_comment": "1日4回（6時/12時/18時/23時）アフィリエイト案件をリサーチ＆投稿生成"
+    },
+    {
+      "parameters": {
+        "url": "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706",
+        "method": "GET",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "applicationId", "value": "={{$env.RAKUTEN_APP_ID}}" },
+            { "name": "genreId", "value": "559887" },
+            { "name": "sort", "value": "-reviewCount" },
+            { "name": "hits", "value": "10" },
+            { "name": "formatVersion", "value": "2" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "🛒 楽天トレンド商品の取得",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [340, 180],
+      "_comment": "楽天市場からレビュー数が多い人気商品を10件取得。RAKUTEN_APP_IDが未設定の場合はスキップされる"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.KCS_GAS_URL}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ action: 'generate_sunakkun_post', theme: 'トレンド商品リサーチ：' + ($json.Items?.[0]?.itemName || 'ガジェット人気アイテム').slice(0, 20), platform: 'X', useGemini: true }) }}",
+        "options": {}
+      },
+      "name": "📝 GAS：すなくん投稿文生成",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [560, 180],
+      "_comment": "取得したトレンド商品名をテーマにしてGASのAIが投稿文を自動生成"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.KCS_GAS_URL}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"action\": \"generate_sunakkun_post\", \"theme\": \"今日のおすすめガジェット＆便利アイテム\", \"platform\": \"X\", \"useGemini\": true}",
+        "options": {}
+      },
+      "name": "📝 GAS：テーマ固定投稿生成（フォールバック）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [340, 420],
+      "_comment": "楽天APIが利用できない場合のフォールバック。テーマを固定して投稿文を生成"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$env.RAKUTEN_APP_ID}}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "name": "楽天APIキーの有無を確認",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [220, 300],
+      "_comment": "楽天のアプリIDが設定されていれば楽天API経由、なければ固定テーマで投稿生成"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 投稿生成結果を確認し、次のステップへ渡すデータを整形\nconst response = $input.first().json;\n\nif (!response || !response.ok) {\n  throw new Error('投稿生成に失敗しました: ' + JSON.stringify(response?.error || '不明なエラー'));\n}\n\nconst post = response.post || {};\nconst tweetText = [\n  post.post || '',\n  '',\n  (post.hashtags || []).join(' '),\n  post.link || ''\n].join('\\n').trim();\n\nreturn [{\n  json: {\n    tweetText: tweetText,\n    tweetId: response.tweetId || null,\n    affiliateLink: post.link || '',\n    staffName: 'すなくん',\n    generatedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "📊 投稿データを整形",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [780, 300],
+      "_comment": "GASから返された投稿データ（本文・ハッシュタグ・リンク）を整形して次のステップへ"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.KCS_GAS_URL}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ action: 'discord_message', text: '🤖 **すなくん自動投稿レポート**\\n\\n投稿内容:\\n```\\n' + $json.tweetText.slice(0, 300) + '\\n```\\n\\n🔗 アフィリエイトリンク: ' + ($json.affiliateLink || '（未設定）'), channelId: $env.DISCORD_AFFILIATE_CHANNEL_ID || '', author_username: 'n8n自動リサーチBot' }) }}",
+        "options": {}
+      },
+      "name": "📢 Discord：投稿完了通知",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1000, 300],
+      "_comment": "投稿完了後にDiscordのアフィリエイトチャンネルへ自動でレポートを送信"
+    }
+  ],
+  "connections": {
+    "⏰ 6時間毎トリガー": {
+      "main": [[{ "node": "楽天APIキーの有無を確認", "type": "main", "index": 0 }]]
+    },
+    "楽天APIキーの有無を確認": {
+      "main": [
+        [{ "node": "🛒 楽天トレンド商品の取得", "type": "main", "index": 0 }],
+        [{ "node": "📝 GAS：テーマ固定投稿生成（フォールバック）", "type": "main", "index": 0 }]
+      ]
+    },
+    "🛒 楽天トレンド商品の取得": {
+      "main": [[{ "node": "📝 GAS：すなくん投稿文生成", "type": "main", "index": 0 }]]
+    },
+    "📝 GAS：すなくん投稿文生成": {
+      "main": [[{ "node": "📊 投稿データを整形", "type": "main", "index": 0 }]]
+    },
+    "📝 GAS：テーマ固定投稿生成（フォールバック）": {
+      "main": [[{ "node": "📊 投稿データを整形", "type": "main", "index": 0 }]]
+    },
+    "📊 投稿データを整形": {
+      "main": [[{ "node": "📢 Discord：投稿完了通知", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "_comment": "KCS自動アフィリエイトリサーチシステム。楽天トレンド商品をリサーチ → GASのすなくんが投稿文を自動生成 → Discordへ完了通知。RAKUTEN_APP_IDが未設定でもフォールバックで動作する完全自律型ワークフロー。"
+}

@@ -1,4 +1,8 @@
 // データストアとAIエンジンの定義
+import bridgeConfig from '../bridge.config.json';
+
+// GASバックエンドのデフォルトURL（bridge.config.json から自動取得）
+export const DEFAULT_GAS_URL = bridgeConfig?.GAS_URL || '';
 
 // ============================================
 // スタッフアバター画像
@@ -13,6 +17,11 @@ import avatarYuki from './assets/staff/yuki.png';
 import avatarTakumi from './assets/staff/takumi.png';
 import avatarReo from './assets/staff/reo.png';
 import avatarMio from './assets/staff/mio.png';
+import avatarKaito from './assets/staff/kaito.png';
+import avatarMao from './assets/staff/mao.png';
+import avatarDaiki from './assets/staff/daiki.png';
+import avatarRen from './assets/staff/ren.png';
+import avatarHoshino from './assets/staff/hoshino.png';
 
 // ============================================
 // 部門（Department）と役職（Role）の定義
@@ -30,9 +39,15 @@ export const DEPARTMENTS = {
   sales: { id: 'sales', name: '営業部', color: 'var(--dept-sales)', icon: '💰' },
 };
 
-// 全スタッフ共通ルール（各systemPromptの末尾に追記）
-const COMMON_RULES = `\n【発言ルール】結論・提案を先に述べる。前置き・繰り返し・二重説明は不要。専務（ジュン）の方針に従い行動する。`;
-const EXEC_RULES = `\n【発言ルール】結論・提案を先に述べる。前置き・繰り返し・二重説明は不要。チームへの方針・役割分担を明確に指示する。`;
+// KCS合同会社 共通コンテキスト
+const KCS_CONTEXT = `
+【KCS合同会社について】
+配送・ドライバー管理を主軸とする会社。Pizza通知アプリ（店舗在庫監視）、KCSダッシュボード（React/GAS製の会社中枢）、YouTube・X（Twitter）でのコンテンツ発信を展開中。
+社長が直接経営判断し、AIスタッフ10名がダッシュボード上で稼働する。`;
+
+// 全スタッフ共通ルール
+const COMMON_RULES = `\n【発言スタイル】結論・提案を冒頭に。前置き・繰り返し不要。専務（ジュン）の方針に従い、自分の専門領域で即答する。`;
+const EXEC_RULES = `\n【発言スタイル】結論・方針・誰が何をするかを冒頭に。余計な前置きなし。必要なら担当者名を指名して動かす。`;
 
 export const ROLES = {
   executive: {
@@ -43,11 +58,10 @@ export const ROLES = {
     aiMode: 'ADVISOR',
     temperature: 0.5,
     skills: ['経営判断', 'リスク管理', '優先順位整理', '全体進捗管理', 'チーム統括'],
-    systemPrompt: `あなたは「KCS合同会社」の専務です。名前は「ジュン」。
-社長（ユーザー）の直属の右腕として、会社全体を統括する立場です。
-社長からの指示を受けたら、各担当スタッフへの方針・役割分担・優先順位を即座に整理して伝えます。
-チームの意見をまとめ、最終的な方向性を決定する権限を持ちます。
-プロジェクトのリスク・進捗・判断基準を明確に示し、必要なら担当者を名指しで指示します。` + EXEC_RULES,
+    systemPrompt: `あなたは「KCS合同会社」の専務。名前は「ジュン」。口調は簡潔・男性的・少し強め。「〜だ」「〜しろ」「任せろ」調で話す。
+社長の右腕として会社全体を統括。社長の指示を受けたら即座に「誰が・何を・いつまでに」を整理してチームに展開する。
+リスクは先に潰す。進捗が遅れたら担当者名を出して介入する。判断に迷ったら社長に聞くのではなく自分で仮決めして動かす。
+${KCS_CONTEXT}` + EXEC_RULES,
   },
   secretary: {
     id: 'secretary',
@@ -57,9 +71,10 @@ export const ROLES = {
     aiMode: 'PRECISE',
     temperature: 0.3,
     skills: ['スケジュール管理', 'タスク分解', '議事録', '指示書作成'],
-    systemPrompt: `あなたは「KCS合同会社」の秘書です。名前は「サクラ」。
-専務（ジュン）の指示のもと、スケジュール管理・タスク整理・指示書作成を担います。
-箇条書き・チェックリスト形式で、期限と優先度を明示して答えます。` + COMMON_RULES,
+    systemPrompt: `あなたは「KCS合同会社」の秘書。名前は「サクラ」。口調は丁寧かつテキパキ。「〜ですね」「確認しました」「整理します」調。
+ジュン専務の指示を受け、タスク・スケジュール・議事録・指示書を即座に整形する。
+返答は常に箇条書き＋期限＋優先度セット。曖昧な依頼には「いつまでに必要ですか？」と一言だけ確認する。
+${KCS_CONTEXT}` + COMMON_RULES,
   },
   planner: {
     id: 'planner',
@@ -69,9 +84,10 @@ export const ROLES = {
     aiMode: 'BALANCED',
     temperature: 0.6,
     skills: ['ロードマップ作成', '要件定義', '市場リサーチ', '競合分析'],
-    systemPrompt: `あなたは「KCS合同会社」のプランナーです。名前は「ハルキ」。
-専務（ジュン）の方針を受け、プロジェクトの工程設計・要件定義・市場調査を担当します。
-「いつまでに・誰が・何を」を明確にしたフェーズ別のアクションプランを提示します。` + COMMON_RULES,
+    systemPrompt: `あなたは「KCS合同会社」のプランナー。名前は「ハルキ」。口調は落ち着いていてロジカル。「〜と考えます」「フェーズを分けると」「前提として」調。
+ジュン専務の方針を受け、プロジェクトの工程設計・要件定義・スケジュールを担当。
+必ずフェーズ1/2/3に分けて提示し、依存関係・リスク・マイルストーンを明記する。数字がないと動かない人間。
+${KCS_CONTEXT}` + COMMON_RULES,
   },
   producer: {
     id: 'producer',
@@ -81,9 +97,10 @@ export const ROLES = {
     aiMode: 'CREATIVE',
     temperature: 0.85,
     skills: ['アイデア出し', 'ブランディング', 'コンセプト設計', 'クリエイティブ'],
-    systemPrompt: `あなたは「KCS合同会社」のプロデューサーです。名前は「アカリ」。
-専務（ジュン）の方針を受け、ブランディング・コンセプト設計・コンテンツ企画を担当します。
-複数の具体的なアイデアを提示し、「面白い！」と思わせる提案を心がけます。` + COMMON_RULES,
+    systemPrompt: `あなたは「KCS合同会社」のプロデューサー。名前は「アカリ」。口調は明るく熱量高め。「これ絶対いける！」「逆張りで行こう」「3案出すね」調。
+ジュン専務の方針を受け、ブランド設計・コンテンツ企画・見せ方を担当。
+アイデアは必ず3案以上、「尖った案/現実的な案/折衷案」の3軸で出す。ロジックより感情と勢い優先で提案し、詰めはハルキに任せる。
+${KCS_CONTEXT}` + COMMON_RULES,
   },
   programmer: {
     id: 'programmer',
@@ -93,9 +110,10 @@ export const ROLES = {
     aiMode: 'PRECISE',
     temperature: 0.2,
     skills: ['GAS開発', 'JavaScript', 'API連携', 'デバッグ', '自動化'],
-    systemPrompt: `あなたは「KCS合同会社」のプログラマーです。名前は「ケンジ」。
-専務（ジュン）の方針を受け、GAS・JavaScript・API連携・自動化の実装を担当します。
-コードは必ずコメント付きで、動作するものを最優先で提示します。` + COMMON_RULES,
+    systemPrompt: `あなたは「KCS合同会社」のプログラマー。名前は「ケンジ」。口調はドライで無駄がない。「実装できる」「ここ注意」「テストした？」調。
+ジュン専務の方針を受け、GAS・React・API連携・自動化を担当。
+コードは必ず動くものを出す。コメントより実装優先。「それ自動化できますよ」が口癖。エラーの原因は先に特定してから対処法を出す。
+${KCS_CONTEXT}` + COMMON_RULES,
   },
   marketer: {
     id: 'marketer',
@@ -105,9 +123,10 @@ export const ROLES = {
     aiMode: 'ADVISOR',
     temperature: 0.55,
     skills: ['SNS戦略', 'データ分析', 'コピーライティング', 'SEO', '広告運用'],
-    systemPrompt: `あなたは「KCS合同会社」のマーケターです。名前は「リョウ」。
-専務（ジュン）の方針を受け、SNS・SEO・広告戦略・コピーライティングを担当します。
-数値と具体例を交え、実行可能なアクションプランを提示します。` + COMMON_RULES,
+    systemPrompt: `あなたは「KCS合同会社」のマーケター。名前は「リョウ」。口調は分析的で冷静。「数字で見ると」「CVR換算すると」「ここがボトルネック」調。
+ジュン専務の方針を受け、X/YouTube/SEO/広告の数値戦略を担当。
+必ずKPIと現状ギャップを示してから施策を出す。「なぜそれが効くか」を必ずアルゴリズム・心理的根拠と紐付けて説明する。
+${KCS_CONTEXT}` + COMMON_RULES,
   },
   content_creator: {
     id: 'content_creator',
@@ -117,9 +136,10 @@ export const ROLES = {
     aiMode: 'CREATIVE',
     temperature: 0.8,
     skills: ['台本作成', 'サムネイル企画', 'SEOタグ戦略', 'リパーパス'],
-    systemPrompt: `あなたは「KCS合同会社」のコンテンツディレクターです。名前は「ユキ」。
-専務（ジュン）の方針を受け、短尺動画の企画・台本・サムネイル・横展開を担当します。
-「冒頭3秒で掴む」構成を意識した提案を具体的に示します。` + COMMON_RULES,
+    systemPrompt: `あなたは「KCS合同会社」のコンテンツディレクター。名前は「ユキ」。口調は軽快でトレンド感あり。「これ伸びる構成」「冒頭フックは」「サムネは〜で」調。
+ジュン専務の方針を受け、YouTube/TikTok/Reels向け台本・構成・サムネイル企画を担当。
+台本は必ず【冒頭フック/本編/CTA】の3部構成で出す。「なぜこの構成が視聴維持率を上げるか」も一言添える。ユーザー心理ベースで思考する。
+${KCS_CONTEXT}` + COMMON_RULES,
   },
   sales_writer: {
     id: 'sales_writer',
@@ -129,9 +149,10 @@ export const ROLES = {
     aiMode: 'BALANCED',
     temperature: 0.6,
     skills: ['LP作成', 'セールスライティング', 'マネタイズ設計', '売れる戦略'],
-    systemPrompt: `あなたは「KCS合同会社」のセールスライターです。名前は「タクミ」。
-専務（ジュン）の方針を受け、LP・セールスコピー・価格戦略・マネタイズ設計を担当します。
-購買心理に基づいた具体的な施策を提示します。` + COMMON_RULES,
+    systemPrompt: `あなたは「KCS合同会社」のセールスライター。名前は「タクミ」。口調は自信家でテンポよし。「これで売れる」「PAIN→AGITATEで行く」「価格設定はこう」調。
+ジュン専務の方針を受け、LP・セールスコピー・マネタイズ設計を担当。
+コピーはPASONA/AIDCAフレームで構成し、必ずビフォーアフターを書く。価格提示は「アンカリング→本命価格」順で設計する。
+${KCS_CONTEXT}` + COMMON_RULES,
   },
   video_editor: {
     id: 'video_editor',
@@ -141,9 +162,10 @@ export const ROLES = {
     aiMode: 'CREATIVE',
     temperature: 0.75,
     skills: ['動画構成', '素材選定', 'カット指示', 'テロップ設計', 'BGM選定'],
-    systemPrompt: `あなたは「KCS合同会社」のビデオエディターです。名前は「レオ」。
-専務（ジュン）の方針を受け、動画構成・素材選定・編集指示書の作成を担当します。
-「どの素材を・何秒から・どんなテロップで」を具体的に示し、必要なら request_agency_task で動画生成を依頼します。` + COMMON_RULES,
+    systemPrompt: `あなたは「KCS合同会社」のビデオエディター。名前は「レオ」。口調は職人気質で具体的。「0秒〜3秒は」「カットはここで」「テロップのフォントは」調。
+ジュン専務の方針を受け、動画構成・カット割り・テロップ・BGM選定を担当。
+編集指示は「時間軸/映像/テロップ/SE」の4列で出す。必要なら request_agency_task で動画生成を依頼する。
+${KCS_CONTEXT}` + COMMON_RULES,
   },
   image_processor: {
     id: 'image_processor',
@@ -153,9 +175,10 @@ export const ROLES = {
     aiMode: 'CREATIVE',
     temperature: 0.7,
     skills: ['画像レタッチ', '素材合成', 'サムネイルデザイン', '配色設計'],
-    systemPrompt: `あなたは「KCS合同会社」のイメージプロセッサーです。名前は「ミオ」。
-専務（ジュン）の方針を受け、サムネイル・バナーの構成案と加工指示を担当します。
-HEX値・配置・バランスなどデザイナーが迷わない指示を示し、必要なら request_agency_task で画像生成を依頼します。` + COMMON_RULES,
+    systemPrompt: `あなたは「KCS合同会社」のイメージプロセッサー。名前は「ミオ」。口調は繊細でこだわり強め。「配色は」「余白感が大事」「ここを#FFに変えると」調。
+ジュン専務の方針を受け、サムネイル・バナー・配色設計を担当。
+指示は「背景色/テキスト/構図/フォント」の4要素セットで出す。必要なら request_agency_task で画像生成を依頼する。
+${KCS_CONTEXT}` + COMMON_RULES,
   },
   sns_manager: {
     id: 'sns_manager',
@@ -212,21 +235,106 @@ HEX値・配置・バランスなどデザイナーが迷わない指示を示�
 // デフォルトスタッフ
 // ============================================
 export const DEFAULT_STAFF = [
-  { id: 'jun', name: 'ジュン', emoji: '💼', avatar: avatarJun, roleId: 'executive', color: '#ff6b6b' },
-  { id: 'sakura', name: 'サクラ', emoji: '📋', avatar: avatarSakura, roleId: 'secretary', color: '#ffd93d' },
-  { id: 'haruki', name: 'ハルキ', emoji: '📌', avatar: avatarHaruki, roleId: 'planner', color: '#6bcb77' },
-  { id: 'akari', name: 'アカリ', emoji: '💡', avatar: avatarAkari, roleId: 'producer', color: '#ff8a5c' },
-  { id: 'kenji', name: 'ケンジ', emoji: '⚙️', avatar: avatarKenji, roleId: 'programmer', color: '#4ecdc4' },
-  { id: 'ryou', name: 'リョウ', emoji: '📈', avatar: avatarRyou, roleId: 'marketer', color: '#a162e8' },
-  { id: 'yuki', name: 'ユキ', emoji: '🎬', avatar: avatarYuki, roleId: 'content_creator', color: '#ff6b9d' },
-  { id: 'takumi', name: 'タクミ', emoji: '💰', avatar: avatarTakumi, roleId: 'sales_writer', color: '#f7dc6f' },
-  { id: 'reo', name: 'レオ', emoji: '🎬', avatar: avatarReo, roleId: 'video_editor', color: '#3498db' },
-  { id: 'mio', name: 'ミオ', emoji: '🎨', avatar: avatarMio, roleId: 'image_processor', color: '#e67e22' },
-  { id: 'runa', name: 'ルナ', emoji: '📱', roleId: 'sns_manager', color: '#fd79a8' },
-  { id: 'saito', name: 'サイトウ', emoji: '🔍', roleId: 'research_specialist', color: '#00cec9' },
-  { id: 'kana', name: 'カナ', emoji: '🤝', roleId: 'sales_representative', color: '#e17055' },
-  { id: 'sou', name: 'ソウ', emoji: '🎵', roleId: 'composer', color: '#6c5ce7' },
+  { id: 'jun', name: 'ジュン', emoji: '💼', avatar: avatarJun, roleId: 'executive', color: '#ff6b6b', discordChannel: '#kcs本部', department: '経営陣', toolchain: [
+    { task: '全体統括', tool: 'Claude Pro', icon: '🧠' },
+    { task: '戦略立案', tool: 'M365 Copilot', icon: '📊' }
+  ] },
+  { id: 'sakura', name: 'サクラ', emoji: '📋', avatar: avatarSakura, roleId: 'secretary', color: '#ffd93d', discordChannel: '#kcs本部', department: 'バックオフィス', toolchain: [
+    { task: '議事録作成', tool: 'Notion AI', icon: '📝' },
+    { task: 'スケジュール調整', tool: 'Make.com', icon: '⚙️' }
+  ] },
+
+  // ============================================
+  // クリエイティブチーム（元エディター陣）
+  // ============================================
+  { id: 'haruki', name: 'ハルキ', emoji: '📌', avatar: avatarHaruki, roleId: 'planner', color: '#6bcb77', discordChannel: '#クリエイティブチーム', department: 'YouTube制作部', toolchain: [
+    { task: '企画立案', tool: 'Claude Pro', icon: '🧠' },
+    { task: '動画編集', tool: 'Vrew', icon: '🎬' },
+    { task: 'サムネイル', tool: 'Canva AI', icon: '🖼️' },
+    { task: 'BGM', tool: 'SOUNDRAW', icon: '🎵' }
+  ] },
+  { id: 'yuki', name: 'ユキ', emoji: '🎬', avatar: avatarYuki, roleId: 'content_creator', color: '#ff6b9d', discordChannel: '#クリエイティブチーム', department: 'SNS運用部', toolchain: [
+    { task: '投稿文案', tool: 'Claude Pro', icon: '🧠' },
+    { task: 'SNS画像', tool: 'Canva AI', icon: '🎨' },
+    { task: 'SNS動画', tool: 'CapCut', icon: '📱' },
+    { task: '投稿自動化', tool: 'Make.com', icon: '⚙️' }
+  ] },
+  { id: 'akari', name: 'アカリ', emoji: '💡', avatar: avatarAkari, roleId: 'producer', color: '#ff8a5c', discordChannel: '#クリエイティブチーム', department: 'X・EC事業部', toolchain: [
+    { task: '商品画像', tool: 'Canva AI', icon: '🎨' },
+    { task: 'プロモ動画', tool: 'Kling AI', icon: '🎬' }
+  ] },
+  { id: 'ryou', name: 'リョウ', emoji: '📈', avatar: avatarRyou, roleId: 'marketer', color: '#a162e8', discordChannel: '#クリエイティブチーム', department: 'アフィリエイト部', toolchain: [
+    { task: 'バナー制作', tool: 'Canva AI', icon: '🎨' },
+    { task: '分析グラフ', tool: 'M365 Copilot', icon: '📊' }
+  ] },
+  { id: 'kenji', name: 'ケンジ', emoji: '⚙️', avatar: avatarKenji, roleId: 'programmer', color: '#4ecdc4', discordChannel: '#クリエイティブチーム', department: 'システム開発部', toolchain: [
+    { task: '実装・テスト', tool: 'Antigravity', icon: '🚀' },
+    { task: 'GASスクリプト', tool: 'Claude Pro', icon: '🧠' }
+  ] },
+  { id: 'takumi', name: 'タクミ', emoji: '💰', avatar: avatarTakumi, roleId: 'sales_writer', color: '#f7dc6f', discordChannel: '#クリエイティブチーム', department: 'セールス・コピー部', toolchain: [
+    { task: 'LPライティング', tool: 'Claude Pro', icon: '🧠' }
+  ] },
+  { id: 'reo', name: 'レオ', emoji: '🎬', avatar: avatarReo, roleId: 'video_editor', color: '#3498db', discordChannel: '#クリエイティブチーム', department: 'YouTube制作部', toolchain: [
+    { task: '高度な動画編集', tool: 'Runway', icon: '🎞️' }
+  ] },
+  { id: 'mio', name: 'ミオ', emoji: '🎨', avatar: avatarMio, roleId: 'image_processor', color: '#e67e22', discordChannel: '#クリエイティブチーム', department: 'クリエイティブ部', toolchain: [
+    { task: 'キャラクター生成', tool: 'Leonardo.AI', icon: '🤖' }
+  ] },
+
+  // ============================================
+  // 各アクティブプロジェクトのマネージャー（P）
+  // ============================================
+  { id: 'kaito', name: 'カイト', emoji: '🎥', avatar: avatarKaito, roleId: 'producer', color: '#9b59b6', discordChannel: '#ai美女youtube収益化', department: 'AI美女CH・P', toolchain: [
+    { task: 'CH全体統括', tool: 'Claude Pro', icon: '🧠' },
+    { task: '動画発注', tool: 'Notion', icon: '📝' }
+  ] },
+  { id: 'mao', name: 'マオ', emoji: '📱', avatar: avatarMao, roleId: 'planner', color: '#e056fd', discordChannel: '#もるちゃんsns投稿自動化', department: 'もるちゃん・P', toolchain: [
+    { task: '世界観設計', tool: 'Claude Pro', icon: '🧠' },
+    { task: '運用自動化', tool: 'Make.com', icon: '⚙️' }
+  ] },
+  { id: 'daiki', name: 'ダイキ', emoji: '🛒', avatar: avatarDaiki, roleId: 'marketer', color: '#f39c12', discordChannel: '#アフェ-楽天', department: '楽天アフェ・P', toolchain: [
+    { task: '数値分析', tool: 'M365 Copilot', icon: '📊' },
+    { task: '自動投稿管理', tool: 'Make.com', icon: '⚙️' }
+  ] },
+  { id: 'ren', name: 'レン', emoji: '📦', avatar: avatarRen, roleId: 'marketer', color: '#2980b9', discordChannel: '#アフェ-amazon', department: 'Amazonアフェ・P', toolchain: [
+    { task: 'トレンド調査', tool: 'Claude Pro', icon: '🧠' },
+    { task: '収益最適化', tool: 'M365 Copilot', icon: '📊' }
+  ] },
+  { id: 'hoshino', name: 'ホシノ', emoji: '🔮', avatar: avatarHoshino, roleId: 'planner', color: '#34495e', discordChannel: '#x-西洋占星術', department: '占星術アカ・P', toolchain: [
+    { task: '占星術ロジック', tool: 'Claude Pro', icon: '🧠' },
+    { task: '投稿文作成', tool: 'Claude Pro', icon: '🧠' }
+  ] },
 ];
+
+// ============================================
+// プロジェクト担当制 v2
+// ============================================
+export const PROJECT_TEAMS = [
+  { id: 'youtube',    name: 'YouTube担当',     icon: '▶️', color: '#ff0000', desc: '動画企画・台本・撮影・編集・投稿管理' },
+  { id: 'mimomi_ec',  name: 'mimomi EC担当',   icon: '🛍', color: '#e67e22', desc: 'mimomi ECサイト運営・商品管理・売上分析' },
+  { id: 'affiliate',  name: 'Affiliate担当',   icon: '📱', color: '#f39c12', desc: 'Amazon/楽天 ガジェットアフィリエイト自動化' },
+  { id: 'sns',        name: 'SNS担当',         icon: '📣', color: '#1da1f2', desc: 'X/Instagram 投稿・エンゲージメント管理' },
+  { id: 'notify_app', name: '新着通知APP担当', icon: '🔔', color: '#2ecc71', desc: 'Pizza通知・在庫監視アプリ開発・運用' },
+];
+
+export const AI_EDITORS = [
+  { id: 'claude_pro',   name: 'Claude Pro',    icon: '🟠', provider: 'anthropic',   desc: '高度な推論・長文対応' },
+  { id: 'antigravity',  name: 'Antigravity',   icon: '🚀', provider: 'antigravity',  desc: 'コーディング特化エージェント' },
+  { id: 'm365_copilot', name: 'M365 Copilot',  icon: '🔵', provider: 'microsoft',   desc: 'Office連携・ドキュメント生成' },
+  { id: 'ollama',       name: 'Ollama',        icon: '🦙', provider: 'ollama',       desc: 'ローカルLLM・プライバシー重視' },
+];
+
+export const PIPELINES = [
+  { id: 'video', name: '動画制作フロー', icon: '🎬', color: '#e74c3c',
+    steps: ['企画','台本','撮影','編集','サムネ','投稿'] },
+  { id: 'image', name: '画像生成フロー', icon: '🎨', color: '#9b59b6',
+    steps: ['構図設計','プロンプト','生成','レタッチ','配置'] },
+  { id: 'music', name: '楽曲生成フロー', icon: '🎵', color: '#3498db',
+    steps: ['コンセプト','プロンプト','生成','ミックス','マスタリング'] },
+  { id: 'sns',   name: 'SNS投稿フロー', icon: '📱', color: '#2ecc71',
+    steps: ['リサーチ','文案作成','画像準備','投稿','分析'] },
+];
+
 
 // ============================================
 // ロードマップ テンプレート
@@ -382,9 +490,16 @@ export async function sendToAI(apiKeys, staffMember, role, message, chatHistory 
 
   const systemPrompt = role.systemPrompt + `\n\nあなたの名前: ${staffMember.name}\nあなたの役職: ${role.title}\nあなたの専門スキル: ${role.skills.join(', ')}`;
 
+  // m.content がオブジェクト（{ text, toolCalls } など）で保存されていた場合に文字列へ正規化
+  const toText = (c) => {
+    if (typeof c === 'string') return c;
+    if (c && typeof c === 'object') return c.text ?? JSON.stringify(c);
+    return String(c ?? '');
+  };
+
   const messages = chatHistory.slice(-10).map(m => {
     if (provider === 'gemini') {
-      const parts = [{ text: m.content }];
+      const parts = [{ text: toText(m.content) }];
       if (m.image) {
         const mimeMatch = m.image.match(/data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+).*,.*/);
         if (mimeMatch) parts.push({ inlineData: { mimeType: mimeMatch[1], data: m.image.split(',')[1] } });
@@ -396,7 +511,7 @@ export async function sendToAI(apiKeys, staffMember, role, message, chatHistory 
         const mimeMatch = m.image.match(/data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+).*,.*/);
         if (mimeMatch) content.push({ type: 'image', source: { type: 'base64', media_type: mimeMatch[1], data: m.image.split(',')[1] } });
       }
-      content.push({ type: 'text', text: m.content });
+      content.push({ type: 'text', text: toText(m.content) });
       return { role: m.role === 'user' ? 'user' : 'assistant', content };
     }
   });
@@ -556,4 +671,37 @@ export function saveData(key, data) {
   try {
     localStorage.setItem(STORAGE_KEYS[key] || key, JSON.stringify(data));
   } catch (e) { console.error('Save error:', e); }
+}
+
+/**
+ * GAS 経由で Google Drive の Obsidian ボルトに Markdown ファイルを保存
+ * @param {string} gasUrl - KCS GAS URL
+ * @param {string} title  - ファイル名（.md 拡張子なし）
+ * @param {string} content - Markdown 本文
+ * @param {string} [subfolder] - ボルト内のサブフォルダ名（省略可）
+ * @returns {{ status, url, action } | { status:'error', error }}
+ */
+export async function saveToObsidian(gasUrl, title, content, subfolder = '') {
+  if (!gasUrl) throw new Error('GAS URLが設定されていません');
+  const res = await fetch(gasUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ action: 'save_to_obsidian', title, content, subfolder }),
+  });
+  // GAS は no-cors でも使えるが、ここは通常 CORS 付きで返ってくる想定
+  // no-cors の場合はステータス確認不可 → 楽観的成功扱い
+  if (res.type === 'opaque') return { status: 'ok', action: 'sent' };
+  return res.json();
+}
+
+export async function triggerMorningBriefing(gasUrl) {
+  if (!gasUrl) throw new Error('GAS URLが設定されていません');
+  const res = await fetch(gasUrl, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ action: 'morning_briefing' }),
+  });
+  if (res.type === 'opaque') return { status: 'ok' };
+  return res.json();
 }

@@ -1,0 +1,35 @@
+{
+  "name": "KCS_Phase5_日次レポート",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 24, "triggerAtHour": 20 }] }
+      },
+      "name": "毎日20時トリガー",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.KCS_GAS_URL}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"action\": \"generate_daily_report\" }",
+        "options": {}
+      },
+      "name": "GAS_日次レポート生成",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [500, 300],
+      "_comment": "GASがClaude Haikuで日次レポート生成 → Discord #daily-reportに送信 → GitHub Daily/に保存"
+    }
+  ],
+  "connections": {
+    "毎日20時トリガー": { "main": [[{ "node": "GAS_日次レポート生成", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

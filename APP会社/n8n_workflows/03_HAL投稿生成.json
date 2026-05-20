@@ -1,0 +1,58 @@
+{
+  "name": "KCS_Phase3_HAL投稿生成",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerOn": "message",
+        "options": {}
+      },
+      "name": "Discord_朝礼チャンネル監視",
+      "type": "n8n-nodes-base.discordTrigger",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "credentials": { "discordBotApi": { "id": "1", "name": "KCS Discord Bot" } },
+      "_comment": "朝礼チャンネルからのあなたのコメントを受け取る"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.content }}",
+              "rightValue": "HAL:",
+              "operator": { "type": "string", "operation": "startsWith" }
+            }
+          ]
+        }
+      },
+      "name": "HAL指示フィルター",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [500, 300],
+      "_comment": "「HAL: 今日のテーマ」形式のメッセージのみ通過"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.KCS_GAS_URL}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"action\": \"generate_hal_post\",\n  \"theme\": \"{{ $json.content.replace('HAL: ', '') }}\",\n  \"platform\": \"X\"\n}",
+        "options": {}
+      },
+      "name": "GAS_HAL投稿生成",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [800, 200],
+      "_comment": "GASがClaude Sonnetで投稿文3案を生成し #hal-project チャンネルに確認メッセージを送る"
+    }
+  ],
+  "connections": {
+    "Discord_朝礼チャンネル監視": { "main": [[{ "node": "HAL指示フィルター", "type": "main", "index": 0 }]] },
+    "HAL指示フィルター": { "main": [[{ "node": "GAS_HAL投稿生成", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "_comment": "使い方: Discordで「HAL: 今日のテーマ」と送信 → GASがClaude Sonnetで3案生成 → #hal-projectに確認メッセージ → ✅リアクションでX投稿承認（approveHALPost）"
+}

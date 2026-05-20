@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(python3)",
+      "Bash(git show *)",
+      "Read(//mnt/c/Users/kenny/AppData/Local/Temp/**)",
+      "PowerShell(Get-Content \"$env:TEMP\\\\gas_base.gs\" -Encoding UTF8 | Select-Object -Last 30)",
+      "PowerShell(Select-String -Pattern \"^function \" \"$env:TEMP\\\\gas_base.gs\" | ForEach-Object { $_.LineNumber.ToString\\(\\) + \": \" + $_.Line } | Out-String | Select-Object -First 1000)",
+      "PowerShell(Get-Content \"$env:TEMP\\\\gas_base.gs\" -Encoding UTF8 | Select-Object -Skip 162 -First 75)",
+      "PowerShell($content = Get-Content \"c:\\\\Users\\\\kenny\\\\.gemini\\\\antigravity\\\\scratch\\\\attendance_app\\\\APP会社\\\\GAS_KCS合同会社_Backend.gs\" -Raw; $lines = \\($content -split \"`n\"\\).Count; Write-Host \"Lines: $lines\"; Write-Host \"Last 300 chars:\"; Write-Host $content.Substring\\([Math]::Max\\(0, $content.Length-300\\)\\))",
+      "Bash(npm --version)",
+      "Bash(npx wrangler@latest --version)",
+      "Bash(npx wrangler@latest login)",
+      "Bash(npx wrangler@latest deploy)",
+      "Bash(curl -s \"https://script.google.com/macros/s/AKfycbxmVS3EyDiT8KtX4r10SIE8eDu3ri_7aRbYXR4kFpEqSKuQnDsJLlTO1HV6p7RW1mTF/exec?action=health\")",
+      "Bash(curl -sL \"https://script.google.com/macros/s/AKfycbxmVS3EyDiT8KtX4r10SIE8eDu3ri_7aRbYXR4kFpEqSKuQnDsJLlTO1HV6p7RW1mTF/exec?action=health\")",
+      "Bash(curl -sL -X POST \"https://script.google.com/macros/s/AKfycbxmVS3EyDiT8KtX4r10SIE8eDu3ri_7aRbYXR4kFpEqSKuQnDsJLlTO1HV6p7RW1mTF/exec\" -H \"Content-Type: application/json\" -d \"{\\\\\"action\\\\\":\\\\\"discord_message\\\\\",\\\\\"text\\\\\":\\\\\"テスト\\\\\",\\\\\"channelId\\\\\":\\\\\"test\\\\\",\\\\\"author\\\\\":\\\\\"claude-test\\\\\"}\")",
+      "mcp__discord__discord_login",
+      "Bash(node -e ' *)"
+    ]
+  }
+}

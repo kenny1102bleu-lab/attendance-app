@@ -1,0 +1,78 @@
+# ============================================================
+# render.yaml — KCS Agency Bridge クラウドデプロイ設定
+# ============================================================
+# 【使い方】
+# 1. GitHubにこのリポジトリをpushする
+# 2. Render.com で「New Background Worker」を作成
+# 3. GitHubリポジトリを紐付ける
+# 4. 環境変数（KCS_GAS_URL, GEMINI_API_KEY など）をダッシュボードで設定
+# 5. 「Deploy」ボタンを押すだけ！ PC電源オフでもずっと動き続ける
+# ============================================================
+
+services:
+  # ──────────────────────────────────────────────────────
+  # ① メインのバックグラウンドワーカー（常駐ブリッジ）
+  # ──────────────────────────────────────────────────────
+  - type: worker
+    name: kcs-agency-bridge
+    runtime: node
+    region: singapore     # 日本に近いシンガポールリージョンを優先
+    plan: free            # 無料プランで起動（必要に応じてstarterに変更）
+    buildCommand: npm install
+    startCommand: node kcs-agency-bridge.mjs
+    autoDeploy: true      # GitHubへのpushで自動デプロイ
+    envVars:
+      # ── ジーエーエス（GAS）のウェブアプリURL ──
+      - key: KCS_GAS_URL
+        sync: false       # Render.comのダッシュボードで手動入力（セキュリティのため）
+
+      # ── ジェミニ（Gemini）エーピーアイキー ──
+      - key: GEMINI_API_KEY
+        sync: false
+
+      # ── クロード（Claude）エーピーアイキー ──
+      - key: CLAUDE_API_KEY
+        sync: false
+
+      # ── ディスコード（Discord）ボットトークン ──
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+
+      # ── ディスコード（Discord）ウェブフック URL ──
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+
+      # ── エックス（X）エーピーアイキー（すなくん用） ──
+      - key: X_CONSUMER_KEY
+        sync: false
+      - key: X_CONSUMER_SECRET
+        sync: false
+      - key: X_ACCESS_TOKEN
+        sync: false
+      - key: X_ACCESS_SECRET
+        sync: false
+
+      # ── エックス（X）エーピーアイキー（ハル用） ──
+      - key: HAL_X_CONSUMER_KEY
+        sync: false
+      - key: HAL_X_CONSUMER_SECRET
+        sync: false
+      - key: HAL_X_ACCESS_TOKEN
+        sync: false
+      - key: HAL_X_ACCESS_SECRET
+        sync: false
+
+      # ── ファイアベース（Firebase）設定 ──
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
+
+      # ── メイク（Make.com）エーピーアイキー ──
+      - key: MAKE_API_KEY
+        sync: false
+
+      # ── ノード（Node.js）の実行環境設定 ──
+      - key: NODE_ENV
+        value: production
+
+    # ヘルスチェック設定（ワーカーはHTTPサーバーではないのでコメントアウト）
+    # healthCheckPath: /health

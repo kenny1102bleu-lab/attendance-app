@@ -1,17 +1,47 @@
 {
+  "env": {
+    "DISCORD_WEBHOOK": "https://discordapp.com/api/webhooks/1494720899264413819/dUqtNV21OBjCPfqqSAfHYGcJvCpOH1maVTtgzhuqO9mcWZvyK3uW81ZKxGbcF5gtsGv2"
+  },
   "permissions": {
     "allow": [
       "Bash(git -C /c/Users/kenny/attendance-app/APP会社 status)",
       "Bash(cp /c/Users/kenny/.gemini/antigravity/scratch/attendance_app/APP会社/src/assets/staff/reo.png /c/Users/kenny/attendance-app/APP会社/src/assets/staff/reo.png)",
       "Bash(cp /c/Users/kenny/.gemini/antigravity/scratch/attendance_app/APP会社/src/assets/staff/mio.png /c/Users/kenny/attendance-app/APP会社/src/assets/staff/mio.png)",
       "Bash(npm run:*)",
-      "Bash(firebase deploy:*)",
-      "Bash(node -e \"const p = require\\('./package.json'\\); const deps = {...p.dependencies,...p.devDependencies}; console.log\\('firebase:', deps.firebase\\)\")"
+      "Bash(npm run build)",
+      "Bash(npm run dev*)",
+      "Bash(firebase deploy*)",
+      "Bash(firebase deploy --only hosting)",
+      "Bash(git status)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(ls*)",
+      "Bash(mkdir*)",
+      "Bash(wc -l*)",
+      "Bash(head*)",
+      "Bash(cat*)",
+      "Bash(node -e \"const p = require\\('./package.json'\\); const deps = {...p.dependencies,...p.devDependencies}; console.log\\('firebase:', deps.firebase\\)\")",
+      "Bash(curl -s -L \"https://script.google.com/macros/s/AKfycbwlUczPBlz7x_CfNPdpvM-pizrcXnk3250d62J5vFdA6d3lpF1IdEJUlm3RqyZK2NUx/exec\")",
+      "Bash(curl -s -L \"https://script.google.com/macros/s/AKfycbwlUczPBlz7x_CfNPdpvM-pizrcXnk3250d62J5vFdA6d3lpF1IdEJUlm3RqyZK2NUx/exec?action=get_new_count\")",
+      "Read(//c/Users/kenny/OneDrive/Downloads/**)",
+      "Read(//d/kenny/Documents/KCS/**)",
+      "Write(//d/kenny/Documents/KCS/**)",
+      "Bash(Get-Item \"c:\\\\Users\\\\kenny\\\\.gemini\\\\antigravity\\\\scratch\\\\attendance_app\\\\APP会社\\\\GAS_KCS合同会社_Backend.gs\")",
+      "Bash(Select-Object Name, LastWriteTime, Length)",
+      "PowerShell(npm --version 2>&1)",
+      "PowerShell(node --version 2>&1)",
+      "PowerShell(Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass)",
+      "PowerShell(npm --version)",
+      "PowerShell(npm install -g @google/clasp 2>&1)"
     ],
+    "defaultMode": "acceptEdits",
     "additionalDirectories": [
       "C:\\Users\\kenny\\attendance-app\\APP会社\\src",
       "C:\\Users\\kenny\\attendance-app\\APP会社",
       "C:\\Users\\kenny\\.gemini\\antigravity\\scratch\\attendance_app\\APP会社\\src"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true
 }
