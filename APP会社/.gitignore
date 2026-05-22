@@ -26,4 +26,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-bridge.config.json  
+bridge.config.json
+
+# Temporary scripts and settings (contains secrets)
+temp_settings.json
+temp_set_keys.cjs
+temp_manual_today.cjs
+temp_patch*.cjs
+patch_*.cjs
+run_manual_today.cjs
+test_triggers_and_x.cjs
+temp_fix_bom.cjs

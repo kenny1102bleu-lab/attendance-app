@@ -79,6 +79,7 @@ function setupKCS() {
     ['X_CONSUMER_SECRET', '', 'すなくん用 X Consumer Secret'],
     ['X_ACCESS_TOKEN', '', 'すなくん用 X Access Token'],
     ['X_ACCESS_SECRET', '', 'すなくん用 X Access Secret'],
+    ['MAKE_X_WEBHOOK_URL', '', 'Make.comのX自動投稿用Webhook URL'],
     ['FULL_AUTO_MODE', 'FALSE', '完全自動化（承認スキップ）モード (TRUE / FALSE)'],
     ['HAL_X_USER_ID', '', 'HAL の X ユーザーID（数字）— メンション取得に必要'],
     ['SUNAKUN_X_USER_ID', '', 'すなくん の X ユーザーID（数字）— メンション取得に必要'],
@@ -88,6 +89,8 @@ function setupKCS() {
     ['LINE_FUNNEL_URL', '', 'LINE誘導用オプトインURL'],
     ['KNOWLEDGE_CHANNEL_ID', '', 'ナレッジチャンネルID（#ナレッジ の右クリック→チャンネルIDをコピー）'],
     ['OBSIDIAN_FOLDER_ID', '', 'Obsidian保存用 Google Drive フォルダID'],
+    ['DRIVE_KNOWLEDGE_IMAGE_FOLDER_ID', '', 'ナレッジ画像追加用 Google Drive フォルダID'],
+    ['DRIVE_PROCESSED_IMAGE_FOLDER_ID', '', '処理済み画像移動用 Google Drive フォルダID'],
   ];
 
   if (!settingsSheet) {
@@ -1052,7 +1055,7 @@ ${projectSummary}
 
   try {
     const res = UrlFetchApp.fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`,
       {
         method: 'post',
         contentType: 'application/json',
@@ -1236,7 +1239,7 @@ function morningBriefing() {
     try {
       const apiKey = config.GEMINI_API_KEY;
       const res = UrlFetchApp.fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`,
         {
           method: 'post',
           contentType: 'application/json',
@@ -1358,33 +1361,7 @@ function handleDiscordMessageFromMake(body) {
     console.warn('[Bridge] ❌ 返信手段なし。設定シートに DISCORD_BOT_TOKEN または DISCORD_WEBHOOK_URLS を設定してください。');
   }
 
-  // ── 0-a. 画像添付 → Knowledge処理 ──
-  const imageUrl = body.imageUrl || body.image_url || '';
-  if (imageUrl) {
-    const result = handleKnowledgeImage({ imageUrl, channelId, username, config });
-    let responseText = '';
-    if (result && result.reply) {
-      responseText = result.reply;
-    } else if (result && result.error) {
-      responseText = `❌ **画像解析エラーが発生しました**\n> ${result.error}\n設定シートのAPIキー（GEMINI_API_KEY）や画像のアクセス権を確認してください。`;
-    } else {
-      responseText = `❌ **不明なエラーが発生しました**\n画像の解析処理を確認してください。`;
-    }
-
-    // 送信先決定
-    let knowledgeWebhookUrl = '';
-    try {
-      const wh = JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}');
-      knowledgeWebhookUrl = wh['knowledge'] || wh['#knowledge'] || '';
-    } catch(e) {}
-    
-    if (knowledgeWebhookUrl) {
-      sendDiscordWebhook(knowledgeWebhookUrl, responseText, 'KCS AI Staff');
-    } else {
-      reply(responseText);
-    }
-    return jsonResponse({ ok: true, source, handled: 'knowledge_image', user: username, result });
-  }
+  
 
   // ── 0-b. HAL: 投稿生成 ──
   if (/^HAL[：:]/i.test(text)) {
@@ -1416,91 +1393,7 @@ function handleDiscordMessageFromMake(body) {
   return jsonResponse({ ok: true, source, handled: 'ai_reply', user: username });
 }
 
-// #knowledge チャンネルの画像をGemini Visionで解析してGitHubに保存
-function handleKnowledgeImage({ imageUrl = '', channelId = '', username = '', config = {} } = {}) {
-  return withErrorHandling(() => {
-    const apiKey = config.GEMINI_API_KEY || '';
-    if (!apiKey) return { reply: '❌ GEMINI_API_KEY が未設定です（スプレッドシートの設定シートに追加してください）' };
 
-    if (!imageUrl) return { reply: '❌ 画像URLが空です' };
-
-    // Discord画像をダウンロードしてbase64変換
-    let imageBase64, mimeType;
-    try {
-      const imgRes = UrlFetchApp.fetch(imageUrl, { muteHttpExceptions: true });
-      if (imgRes.getResponseCode() !== 200) {
-        return { reply: `❌ 画像のダウンロードに失敗しました。Discord側のアクセス制限の可能性があります。HTTPステータス: ${imgRes.getResponseCode()}` };
-      }
-      const blob = imgRes.getBlob();
-      mimeType = blob.getContentType() || 'image/jpeg';
-      imageBase64 = Utilities.base64Encode(blob.getBytes());
-    } catch (e) {
-      return { reply: `❌ 画像の取得中に通信エラーが発生しました: ${e.message}` };
-    }
-
-    const prompt = `添付画像を分析してください：
-1. 内容の要約（3行以内）
-2. 重要度（高/中/低）
-3. HAL・すなくん・他プロジェクトへの応用方法
-4. 具体的な活用アイデア（3つ）
-5. 保存推奨フォルダ（Knowledge/推し活・ファッション・美容・SNSバズ・グルメ 等）
-Markdown形式で回答してください。`;
-
-    const payload = {
-      contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: imageBase64 } }] }]
-    };
-
-    let analysis = '';
-    try {
-      const res = UrlFetchApp.fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-        { method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: JSON.stringify(payload) }
-      );
-      const resCode = res.getResponseCode();
-      if (resCode !== 200) {
-        return { reply: `❌ Gemini APIエラー (HTTP ${resCode}): ${res.getContentText().slice(0, 300)}` };
-      }
-      const data = JSON.parse(res.getContentText());
-      analysis = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    } catch (e) {
-      return { reply: `❌ Gemini Visionの呼び出し中にエラーが発生しました: ${e.message}` };
-    }
-
-    if (!analysis) return { reply: '⚠️ 画像の解析結果が空でした。' };
-
-    // GitHubに保存
-    const dateTag = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
-    const displayDate = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm');
-    const content = `---\ndate: ${displayDate}\ntags: [knowledge, screenshot]\nauthor: ${username}\n---\n\n# スクショ知識 ${displayDate}\n\n${analysis}\n\n---\n画像URL: ${imageUrl}\n`;
-    const gitResult = saveToGitHub(`Knowledge/スクショ/スクショ_${dateTag}.md`, content, `スクショ知識追加 ${displayDate}`);
-
-    let githubWarning = '';
-    if (!gitResult || !gitResult.ok) {
-      githubWarning = `\n⚠️ **GitHubへの自動保存に失敗しました**: ${gitResult ? gitResult.error : '不明なエラー'}`;
-    }
-
-    return { reply: `📚 **ナレッジ保存完了！**${githubWarning}\n\n${analysis.slice(0, 800)}` };
-  }, 'handleKnowledgeImage');
-}
-
-// GASエディタから直接実行してknowledge画像パイプラインをテストする関数
-function testKnowledgeImageFlow() {
-  const config = getKCSSettings();
-  const testImageUrl = 'https://www.gstatic.com/webp/gallery/1.jpg';
-  console.log('[Test] GEMINI_API_KEY先頭:', (config.GEMINI_API_KEY || '').slice(0, 8) + '...');
-  const result = handleKnowledgeImage({
-    imageUrl: testImageUrl,
-    channelId: 'test-channel',
-    username: 'GASテスト',
-    config: config
-  });
-  console.log('[Test] Result:', JSON.stringify(result));
-  if (result && result.reply) {
-    console.log('[Test] 成功！Reply:', result.reply.slice(0, 300));
-  } else {
-    console.log('[Test] 失敗: replyなし');
-  }
-}
 
 /**
  * コマンドハンドラ（!コマンドを解析して実行）
@@ -1631,8 +1524,11 @@ function setupAllTriggers() {
   if (!existing.includes('checkSystemEmails')) {
     ScriptApp.newTrigger('checkSystemEmails').timeBased().everyMinutes(5).create();
   }
+  if (!existing.includes('processDriveKnowledgeImages')) {
+    ScriptApp.newTrigger('processDriveKnowledgeImages').timeBased().everyMinutes(5).create();
+  }
   
-  SpreadsheetApp.getUi().alert('✅ 全トリガーを正常に設定しました（朝8時: 朝礼ブリーフィング(morningBriefing), 12時: アマゾンアフィリエイト(autoPostAffiliateAmazon), 18時: 楽天アフィリエイト(autoPostAffiliateRakuten), 夜20時: 日報レポート(generateDailyReport), 1分毎: ディスコード監視(discordAgentTick), 5分毎: システムメール監視(checkSystemEmails)）');
+  SpreadsheetApp.getUi().alert('✅ 全トリガーを正常に設定しました（5分毎: システムメール監視, Drive画像監視など）');
 }
 
 function manualHealTriggers() { setupAllTriggers(); }
@@ -2541,60 +2437,101 @@ function getTwitterLength(text) {
   return len;
 }
 
-// エックス（X / 旧Twitter）への投稿（APIキー未設定時はログのみ）
+// エックス（X / 旧Twitter）への投稿（直接投稿優先、無ければMake.com Webhook経由のハイブリッド）
 function postToX(text, account = 'sunakun') {
   const config = getKCSSettings();
-  let consumerKey, consumerSecret, accessToken, accessSecret;
+  account = account || 'sunakun';
 
+  // 1. スプレッドシートに直接投稿用のX APIキーが揃っているか確認
+  let consumerKey, consumerSecret, accessToken, accessSecret;
   if (account === 'hal') {
-    consumerKey    = config.HAL_X_CONSUMER_KEY    || 'UrwY2O54uyZElpwHff13OrnYl';
-    consumerSecret = config.HAL_X_CONSUMER_SECRET || 'meesvO1oG11cpqZCvYUrL02c5SwXITizx7X7A9NIOIx81bvyNE';
-    accessToken    = config.HAL_X_ACCESS_TOKEN    || '2054022784599355392-wwpREomFsUDu5t1JSZvWSQikyGYHx0';
-    accessSecret   = config.HAL_X_ACCESS_SECRET   || 'mqY44MlgOSCiT2ymQAsMQJFFDNU7qtS65rBg769h87U0w';
+    consumerKey    = config.HAL_X_CONSUMER_KEY;
+    consumerSecret = config.HAL_X_CONSUMER_SECRET;
+    accessToken    = config.HAL_X_ACCESS_TOKEN;
+    accessSecret   = config.HAL_X_ACCESS_SECRET;
   } else {
-    consumerKey    = config.X_CONSUMER_KEY    || 'szNp3fsG3iSXzLIis2DmYbBsn';
-    consumerSecret = config.X_CONSUMER_SECRET || 'oBzlMjv4SlO3NRSbm5oB4SsF3IgPW0Xts20MtRGYI5jxW9AFSN';
-    accessToken    = config.X_ACCESS_TOKEN    || '2047344231077855232-C03CRFs2AIXjV68po37sbtw9PnTIXU';
-    accessSecret   = config.X_ACCESS_SECRET   || 'gLt0BAmdOQzTZevnbspTG4qvCUh1PRhGdbivhpyZOfQrD';
+    consumerKey    = config.X_CONSUMER_KEY;
+    consumerSecret = config.X_CONSUMER_SECRET;
+    accessToken    = config.X_ACCESS_TOKEN;
+    accessSecret   = config.X_ACCESS_SECRET;
   }
 
-  if (!consumerKey || !accessToken) {
-    console.warn('[postToX] エックス APIキー未設定 — 投稿スキップ。本文:', text.slice(0, 50));
-    return { ok: false, skipped: true, reason: 'エックス APIキー未設定' };
+  if (consumerKey && consumerSecret && accessToken && accessSecret) {
+    console.log('[postToX] ' + account + ' として直接エックスへ新規投稿を実行します...');
+    const directResult = postToXDirect(text, { consumerKey, consumerSecret, accessToken, accessSecret }, account);
+    if (directResult && directResult.ok) {
+      return directResult;
+    }
+    console.warn('[postToX] 直接投稿に失敗しました。メイク経由でのフォールバックを試みます。詳細:', JSON.stringify(directResult));
+  }
+
+  // 2. キーが無い、または直接投稿が失敗した場合は従来の Make.com Webhook 経由
+  const webhookUrl = config.MAKE_X_WEBHOOK_URL;
+  if (!webhookUrl) {
+    console.warn('[postToX] 投稿スキップ：エックスAPIキーおよび MAKE_X_WEBHOOK_URL の両方が未設定です。本文:', text.slice(0, 50));
+    return { ok: false, skipped: true, reason: '連携用の設定が不足しています' };
   }
 
   try {
-    // OAuth 1.0a 署名（Twitter API v2 用）
+    const payload = {
+      account: account,
+      text: text
+    };
+    
+    const res = UrlFetchApp.fetch(webhookUrl, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    const code = res.getResponseCode();
+    const bodyText = res.getContentText();
+
+    if (code >= 200 && code < 300) {
+      console.log('[postToX] Make.com Webhook 送信成功');
+      return { ok: true, webhook_response: bodyText };
+    } else {
+      console.error('[postToX] Make.com Webhook 送信失敗:', bodyText);
+      return { ok: false, error: bodyText };
+    }
+  } catch (e) {
+    console.error('[postToX] Make.com Webhook 送信例外:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+// エックス（X / 旧Twitter）へ直接新規投稿を行う内部関数
+function postToXDirect(text, keys, account = 'sunakun') {
+  try {
     const url = 'https://api.twitter.com/2/tweets';
     const timestamp = Math.floor(Date.now() / 1000).toString();
     const nonce = Utilities.getUuid().replace(/-/g, '');
 
-    const params = {
-      oauth_consumer_key: consumerKey,
+    const oauthParams = {
+      oauth_consumer_key: keys.consumerKey,
       oauth_nonce: nonce,
       oauth_signature_method: 'HMAC-SHA1',
       oauth_timestamp: timestamp,
-      oauth_token: accessToken,
+      oauth_token: keys.accessToken,
       oauth_version: '1.0'
     };
 
-    const paramStr = Object.keys(params).sort()
-      .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`)
+    const paramStr = Object.keys(oauthParams).sort()
+      .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(oauthParams[k]))
       .join('&');
-    const baseStr = `POST&${encodeURIComponent(url)}&${encodeURIComponent(paramStr)}`;
-    const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(accessSecret)}`;
+    const baseStr = 'POST&' + encodeURIComponent(url) + '&' + encodeURIComponent(paramStr);
+    const signingKey = encodeURIComponent(keys.consumerSecret) + '&' + encodeURIComponent(keys.accessSecret);
     const signature = Utilities.base64Encode(
       Utilities.computeHmacSignature(Utilities.MacAlgorithm.HMAC_SHA_1, baseStr, signingKey)
     );
-    params['oauth_signature'] = signature;
+    oauthParams['oauth_signature'] = signature;
 
-    const authHeader = 'OAuth ' + Object.keys(params).sort()
-      .map(k => `${encodeURIComponent(k)}="${encodeURIComponent(params[k])}"`)
+    const authHeader = 'OAuth ' + Object.keys(oauthParams).sort()
+      .map(k => encodeURIComponent(k) + '="' + encodeURIComponent(oauthParams[k]) + '"')
       .join(', ');
 
-    // Xの正式な制限（半角280文字/全角140文字）に合致するよう安全に切り出し
-    const safeText = sliceTwitterText(text, 280);
-
+    const safeText = sliceTwitterText(text, 280); // 新規ポストは最大280字
     const res = UrlFetchApp.fetch(url, {
       method: 'post',
       contentType: 'application/json',
@@ -2604,30 +2541,15 @@ function postToX(text, account = 'sunakun') {
     });
 
     const code = res.getResponseCode();
-    const bodyText = res.getContentText();
-    let body = {};
-    try { body = JSON.parse(bodyText); } catch(e) { body = { raw: bodyText }; }
-
+    const body = JSON.parse(res.getContentText());
     if (code === 201 || code === 200) {
-      console.log('[postToX] エックス投稿成功:', body?.data?.id);
+      console.log('[postToXDirect] ' + account + ' 直接新規投稿成功:', body?.data?.id);
       return { ok: true, tweetId: body?.data?.id };
-    } else {
-      console.error('[postToX] エックス投稿失敗:', bodyText.slice(0, 200));
-      // Discordエラーログチャンネル等にエラー詳細を通知する
-      notifyDiscordError(
-        `エックス投稿 (${account}用)`,
-        `HTTPステータス: ${code}\n応答内容: ${bodyText.slice(0, 300)}`,
-        `エックス（X）のAPI設定、トークン有効期限、またはAPI利用制限の上限を確認してください。`
-      );
-      return { ok: false, error: body };
     }
+    console.error('[postToXDirect] ' + account + ' 直接投稿失敗:', res.getContentText());
+    return { ok: false, error: body };
   } catch (e) {
-    console.error('[postToX] エックス例外発生:', e.message);
-    notifyDiscordError(
-      `エックス投稿例外 (${account}用)`,
-      `エラー内容: ${e.message}`,
-      `プログラムの実行時に致命的な問題が発生しました。エラーログを確認してください。`
-    );
+    console.error('[postToXDirect] ' + account + ' 例外:', e.message);
     return { ok: false, error: e.message };
   }
 }
@@ -4152,7 +4074,7 @@ function analyzeErrorEmailWithGemini(subject, body, apiKey) {
 
   try {
     const res = UrlFetchApp.fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`,
       {
         method: 'post',
         contentType: 'application/json',
@@ -4426,4 +4348,208 @@ function executeApprovedPatch(patchId) {
     taskSheet.getRange(foundRow, 6).setValue('エラー');
     return { ok: false, message: `パッチ適用処理中に例外が発生しました: ${e.message}` };
   }
+}
+
+
+/**
+ * Driveのナレッジ画像用フォルダを監視し、新しい画像を処理する
+ */
+function processDriveKnowledgeImages() {
+  const config = getKCSSettings();
+  const sourceFolderId = config.DRIVE_KNOWLEDGE_IMAGE_FOLDER_ID;
+  const processedFolderId = config.DRIVE_PROCESSED_IMAGE_FOLDER_ID;
+  
+  if (!sourceFolderId || !processedFolderId) {
+    console.error('[DriveKnowledge] ❌ エラー: Google ドライブ監視用フォルダIDが設定シートに登録されていません。');
+    console.error('[DriveKnowledge] 設定シートに以下のキーと正しいフォルダIDが登録されているかご確認ください：');
+    console.error('[DriveKnowledge] 1. DRIVE_KNOWLEDGE_IMAGE_FOLDER_ID (画像投入用フォルダID)');
+    console.error('[DriveKnowledge] 2. DRIVE_PROCESSED_IMAGE_FOLDER_ID (処理済み移動先フォルダID)');
+    return;
+  }
+  
+  let sourceFolder, processedFolder;
+  try {
+    sourceFolder = DriveApp.getFolderById(sourceFolderId);
+  } catch(e) {
+    console.error('[DriveKnowledge] ❌ エラー: 処理待ちフォルダ(DRIVE_KNOWLEDGE_IMAGE_FOLDER_ID)の取得に失敗しました。IDが正しくないか、GASにアクセス権限がありません。詳細:', e.message);
+    return;
+  }
+  try {
+    processedFolder = DriveApp.getFolderById(processedFolderId);
+  } catch(e) {
+    console.error('[DriveKnowledge] ❌ エラー: 処理済みフォルダ(DRIVE_PROCESSED_IMAGE_FOLDER_ID)の取得に失敗しました。IDが正しくないか、GASにアクセス権限がありません。詳細:', e.message);
+    return;
+  }
+  
+  const files = sourceFolder.getFiles();
+  let count = 0;
+  
+  while (files.hasNext()) {
+    if (count >= 5) break; // 1回の実行で最大5件まで（タイムアウト防止）
+    const file = files.next();
+    const mimeType = file.getMimeType();
+    
+    // 画像ファイルのみ対象
+    if (mimeType.startsWith('image/')) {
+      console.log(`[DriveKnowledge] 画像処理開始: ${file.getName()}`);
+      count++;
+      
+      const apiKey = config.GEMINI_API_KEY || '';
+      if (!apiKey) {
+        console.error('[DriveKnowledge] GEMINI_API_KEY が未設定です。');
+        break;
+      }
+      
+      let imageBase64;
+      try {
+        const blob = file.getBlob();
+        imageBase64 = Utilities.base64Encode(blob.getBytes());
+      } catch (e) {
+        console.error(`[DriveKnowledge] ファイル読込エラー: ${file.getName()}`, e.message);
+        continue;
+      }
+      
+      const prompt = `添付画像を分析してください：\n1. 内容の要約（3行以内）\n2. 重要度（高/中/低）\n3. HAL・すなくん・他プロジェクトへの応用方法\n4. 具体的な活用アイデア（3つ）\n5. 保存推奨フォルダ（Knowledge/推し活・ファッション・美容・SNSバズ・グルメ 等）\nMarkdown形式で回答してください。`;
+      
+      const payload = {
+        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: imageBase64 } }] }]
+      };
+      
+      let analysis = '';
+      try {
+        const res = UrlFetchApp.fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`,
+          { method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: JSON.stringify(payload) }
+        );
+        if (res.getResponseCode() === 200) {
+          const data = JSON.parse(res.getContentText());
+          analysis = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        } else {
+          console.error('[DriveKnowledge] Gemini APIエラー:', res.getContentText());
+          continue;
+        }
+      } catch (e) {
+        console.error('[DriveKnowledge] Gemini 通信エラー:', e.message);
+        continue;
+      }
+      
+      if (analysis) {
+        const dateTag = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
+        const displayDate = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm');
+        const content = `---\ndate: ${displayDate}\ntags: [knowledge, drive_image]\nauthor: DriveUpload\n---\n\n# ドライブ画像知識 ${displayDate}\n\n${analysis}\n\n---\nファイル名: ${file.getName()}\n`;
+        
+        saveToGitHub(`Knowledge/スクショ/ドライブ_${dateTag}.md`, content, `ドライブ画像知識追加 ${displayDate}`);
+        
+        
+      }
+      
+      // 処理済みフォルダへ移動
+      try {
+        file.moveTo(processedFolder);
+        console.log(`[DriveKnowledge] 処理済みフォルダへ移動完了: ${file.getName()}`);
+      } catch(e) {
+        console.error(`[DriveKnowledge] ファイル移動エラー: ${file.getName()}`, e.message);
+      }
+    }
+  }
+}
+
+/**
+ * Drive監視トリガーの手動設定
+ */
+function setupKnowledgeDriveTrigger() {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'processDriveKnowledgeImages').forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('processDriveKnowledgeImages').timeBased().everyMinutes(5).create();
+  console.log('✅ Drive監視トリガーを設定しました（5分毎）。');
+  try { SpreadsheetApp.getUi().alert('✅ Drive監視トリガーを設定しました（5分毎）。'); } catch(e){}
+}
+
+/**
+ * 今日追加された画像をDrive全体から検索して1回だけ解析する（手動実行用）
+ */
+function manualProcessTodayImages() {
+  const config = getKCSSettings();
+  const apiKey = config.GEMINI_API_KEY || '';
+  if (!apiKey) {
+    console.error('[ManualDrive] GEMINI_API_KEY が未設定です。');
+    return { status: 'error', message: 'APIキーがありません' };
+  }
+
+  // 昨日以降の日付を取得 (検索漏れを防ぐため広めに取る)
+  const date = new Date();
+  date.setDate(date.getDate() - 2); // 念のため2日前から
+  const dateStr = Utilities.formatDate(date, 'Asia/Tokyo', 'yyyy-MM-dd');
+  
+  console.log('[ManualDrive] 検索開始:', dateStr);
+  
+  // 作成された画像ファイルをDrive全体から検索
+  const query = "mimeType contains 'image/' and createdDate >= '" + dateStr + "'";
+  let files;
+  try {
+    files = DriveApp.searchFiles(query);
+  } catch(e) {
+    console.error('[ManualDrive] 検索エラー:', e.message);
+    return { status: 'error', message: e.message };
+  }
+
+  let count = 0;
+  let processedFiles = [];
+
+  while (files.hasNext()) {
+    if (count >= 3) break; // タイムアウト防止のため最大3件
+    const file = files.next();
+    const mimeType = file.getMimeType();
+    
+    console.log(`[ManualDrive] 見つけました: ${file.getName()}`);
+    count++;
+    
+    let imageBase64;
+    try {
+      const blob = file.getBlob();
+      imageBase64 = Utilities.base64Encode(blob.getBytes());
+    } catch (e) {
+      console.error(`[ManualDrive] 読込エラー: ${file.getName()}`, e.message);
+      continue;
+    }
+    
+    const prompt = `添付画像を分析してください：\n1. 内容の要約（3行以内）\n2. 重要度（高/中/低）\n3. HAL・すなくん・他プロジェクトへの応用方法\n4. 具体的な活用アイデア（3つ）\n5. 保存推奨フォルダ（Knowledge/推し活・ファッション・美容・SNSバズ・グルメ 等）\nMarkdown形式で回答してください。`;
+    
+    const payload = {
+      contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: imageBase64 } }] }]
+    };
+    
+    let analysis = '';
+    try {
+      const res = UrlFetchApp.fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`,
+        { method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: JSON.stringify(payload) }
+      );
+      if (res.getResponseCode() === 200) {
+        const data = JSON.parse(res.getContentText());
+        analysis = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      } else {
+        console.error('[ManualDrive] APIエラー:', res.getContentText());
+      }
+    } catch (e) {
+      console.error('[ManualDrive] 通信エラー:', e.message);
+    }
+    
+    if (analysis) {
+      const dateTag = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
+      const displayDate = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm');
+      const content = `---\ndate: ${displayDate}\ntags: [knowledge, drive_image]\nauthor: DriveUpload (Manual)\n---\n\n# ドライブ画像知識 ${displayDate}\n\n${analysis}\n\n---\nファイル名: ${file.getName()}\n`;
+      
+      saveToGitHub(`Knowledge/スクショ/ドライブ_${dateTag}.md`, content, `ドライブ画像知識追加 ${displayDate}`);
+      
+      const channelId = config.KNOWLEDGE_CHANNEL_ID || config.DISCORD_CHANNEL_ID;
+      const token = config.DISCORD_BOT_TOKEN;
+      if (channelId && token) {
+        const reply = `✅ **（再試行）Drive画像のまとめ完了！**\n\n📁 **ファイル**: \`${file.getName()}\`\n\n${analysis}`;
+        sendDiscordMessage(channelId, reply, token);
+      }
+      processedFiles.push(file.getName());
+    }
+  }
+  
+  return { status: 'ok', count: count, files: processedFiles };
 }

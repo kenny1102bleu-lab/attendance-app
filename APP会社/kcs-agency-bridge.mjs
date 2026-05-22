@@ -107,6 +107,9 @@ async function handleTask(task) {
       case 'hal_talk_synthesis':
         resultMsg = await handleHalTalkSynthesis(task);
         break;
+      case 'save_code':
+        resultMsg = await handleSaveCodeTask(task);
+        break;
       default:
         resultMsg = '未対応のタスク種別です。';
     }
@@ -119,6 +122,58 @@ async function handleTask(task) {
     console.error(`❌ 実行失敗 [${task.taskId}]:`, err.message);
     await updateStatus(task.taskId, 'エラー', err.message);
   }
+}
+
+// --- 遠隔コード保存ハンドラ ---
+
+/**
+ * save_code: Discordの #code-inbox チャンネルから送信されたコードを
+ * ローカルの code_inbox/ フォルダに保存する
+ *
+ * ファイル名指定方法:
+ *   1行目に「// filename: example.js」と書けばそのファイル名で保存
+ *   指定がなければ「code_YYYYMMDD_HHMMSS.txt」として保存
+ */
+async function handleSaveCodeTask(task) {
+  console.log('📥 遠隔コード保存を開始します...');
+
+  const codeInboxDir = path.join(process.cwd(), 'code_inbox');
+  if (!fs.existsSync(codeInboxDir)) {
+    fs.mkdirSync(codeInboxDir, { recursive: true });
+    console.log(`📁 code_inbox フォルダを作成しました。`);
+  }
+
+  const codeText = task.instruction || '';
+  if (!codeText.trim()) {
+    throw new Error('コードの内容が空です。');
+  }
+
+  // パラメータからファイル名を取得
+  let filename = '';
+  try {
+    const params = typeof task.params === 'string' ? JSON.parse(task.params) : (task.params || {});
+    filename = params.filename || '';
+  } catch { /* パースエラーは無視 */ }
+
+  // ファイル名が未指定の場合はタイムスタンプで自動生成
+  if (!filename) {
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const dateStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    filename = `code_${dateStr}.txt`;
+  }
+
+  // ファイル名のセキュリティ対策（パストラバーサル防止）
+  filename = path.basename(filename);
+
+  // サブフォルダ指定対応（filename に / が含まれていた場合は basename で除去済み）
+  const outputPath = path.join(codeInboxDir, filename);
+
+  // コード本文を保存（1行目の filename 指示行を残す形で保存）
+  fs.writeFileSync(outputPath, codeText, 'utf-8');
+  console.log(`✅ コードを保存しました: ${outputPath}`);
+
+  return `遠隔コードをローカルに保存しました: code_inbox/${filename} (${codeText.length}文字)`;
 }
 
 async function updateStatus(taskId, status, result = '') {
