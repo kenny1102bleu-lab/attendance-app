@@ -1,0 +1,17 @@
+name: Morning Briefing (9:00 AM JST)
+
+on:
+  schedule:
+    # 毎日 日本時間 午前9:00 (UTC 0:00)
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-morning-briefing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call GAS Webhook for Morning Briefing
+        run: |
+          curl -L -X POST ${{ secrets.GAS_WEBHOOK_URL }} \
+            -H "Content-Type: application/json" \
+            -d '{"action": "morning_briefing", "source": "github-actions"}'
