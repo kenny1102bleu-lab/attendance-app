@@ -1,0 +1,17 @@
+name: Daily Report (20:00 JST)
+
+on:
+  schedule:
+    # 毎日 日本時間 20:00 (UTC 11:00)
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-daily-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call GAS Webhook for Daily Report
+        run: |
+          curl -L -X POST ${{ secrets.GAS_WEBHOOK_URL }} \
+            -H "Content-Type: application/json" \
+            -d '{"action": "daily_report", "source": "github-actions"}'

@@ -1,0 +1,105 @@
+name: Firebase Health Check & Auto Deploy
+
+on:
+  schedule:
+    # 毎日 00:00 UTC = 09:00 JST
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: '強制デプロイ（チェックなしで即デプロイ）'
+        required: false
+        default: 'false'
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    outputs:
+      site_status: ${{ steps.check.outputs.status }}
+      needs_deploy: ${{ steps.check.outputs.needs_deploy }}
+
+    steps:
+      - name: HTTPチェック
+        id: check
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://nexus-co-66f9b.web.app --max-time 15)
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          if [ "$STATUS" = "200" ] && [ "${{ github.event.inputs.force_deploy }}" != "true" ]; then
+            echo "needs_deploy=false" >> $GITHUB_OUTPUT
+            echo "✅ サイト正常 (HTTP $STATUS)"
+          else
+            echo "needs_deploy=true" >> $GITHUB_OUTPUT
+            echo "⚠️ デプロイが必要 (HTTP $STATUS)"
+          fi
+
+  deploy:
+    needs: health-check
+    if: needs.health-check.outputs.needs_deploy == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_result: ${{ steps.deploy.outputs.result }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: attendance-web-app/package-lock.json
+
+      - name: 依存パッケージインストール
+        working-directory: attendance-web-app
+        run: npm ci
+
+      - name: ビルド
+        working-directory: attendance-web-app
+        run: npm run build
+
+      - name: Firebase デプロイ
+        id: deploy
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          echo "$GOOGLE_APPLICATION_CREDENTIALS_JSON" > /tmp/sa.json
+          npm install -g firebase-tools
+          GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa.json firebase deploy --only hosting --non-interactive --project nexus-co-66f9b
+          echo "result=success" >> $GITHUB_OUTPUT
+
+      - name: デプロイ後の確認
+        id: verify
+        run: |
+          sleep 10
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://nexus-co-66f9b.web.app --max-time 15)
+          echo "post_status=$STATUS" >> $GITHUB_OUTPUT
+
+  notify:
+    needs: [health-check, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 通知用GASへPOST
+        run: |
+          SITE_STATUS="${{ needs.health-check.outputs.site_status }}"
+          NEEDS_DEPLOY="${{ needs.health-check.outputs.needs_deploy }}"
+          DEPLOY_RESULT="${{ needs.deploy.outputs.deploy_result }}"
+          DEPLOY_JOB="${{ needs.deploy.result }}"
+
+          if [ "$NEEDS_DEPLOY" = "false" ]; then
+            MSG="✅ Firebase 正常稼働中 (HTTP $SITE_STATUS)"
+          elif [ "$DEPLOY_JOB" = "success" ]; then
+            MSG="🔧 Firebase 自動修復完了 (再デプロイ成功)"
+          elif [ "$DEPLOY_JOB" = "skipped" ]; then
+            MSG="✅ Firebase 正常稼働中 (HTTP $SITE_STATUS)"
+          else
+            MSG="❌ Firebase 修復失敗 手動確認要 (HTTP $SITE_STATUS)"
+          fi
+
+          curl -s -X POST "${{ secrets.GAS_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"type\":\"firebase_health\",\"message\":\"$MSG\",\"run_url\":\"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            || true
+
+          echo "$MSG"
+          echo "Run URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
