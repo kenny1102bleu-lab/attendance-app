@@ -1,7 +1,7 @@
 name: Discord Monitor
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/10 * * * *'   # 10分ごと（Make.comの15分より高頻度・無料）
   workflow_dispatch:
 
 jobs:
@@ -14,9 +14,9 @@ jobs:
           node-version: '20'
       - name: Install dependencies
         run: npm install node-fetch
-      - name: Run Monitor Script
+      - name: Run Discord Monitor (Make.com代替)
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           GAS_WEBHOOK_URL: ${{ secrets.GAS_WEBHOOK_URL }}
-          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          DISCORD_CHANNEL_IDS: ${{ secrets.DISCORD_CHANNEL_IDS }}
         run: node scripts/discord_monitor.mjs
