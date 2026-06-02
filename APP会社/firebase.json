@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "public": "dist",
+    "public": "attendance-web-app/dist",
     "ignore": [
       "firebase.json",
       "**/.*",
