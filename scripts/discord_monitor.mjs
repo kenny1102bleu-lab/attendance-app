@@ -1,5 +1,5 @@
 /**
- * KCS Discord Monitor - GitHub Actions で定期実行 (*/10 * * * *)
+ * KCS Discord Monitor - GitHub Actions で定期実行 (every 10 minutes)
  * Make.com のDiscordポーリングシナリオを完全代替
  *
  * 機能:
