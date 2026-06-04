@@ -50,6 +50,7 @@ jobs:
           elif [ "$ACCOUNT" = "hal" ]; then
             GAS_ACTION="auto_post_hal"
           else
+            # UTC 03時 = JST 12時 → Amazon / UTC 09時 = JST 18時 → 楽天
             HOUR=$(date -u +%H)
             if [ "$HOUR" = "03" ]; then
               GAS_ACTION="auto_post_affiliate_amazon"
