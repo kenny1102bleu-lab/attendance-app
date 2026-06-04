@@ -1,27 +1,40 @@
 /**
  * KCS X自動投稿スクリプト（GitHub Actions用）
- * OAuth 2.0 Bearer Token 優先、フォールバックで OAuth 1.0a
+ * agent-twitter-client を使用（X APIクレジット不要・Cookie認証方式）
  *
  * 環境変数:
  *   X_ACCOUNT        : 'sunakun' | 'hal'
  *   TWEET_TEXT       : 投稿するテキスト
- *   X_OAUTH2_TOKEN   : GASから取得したOAuth2アクセストークン（優先）
- *   X_CONSUMER_KEY / X_CONSUMER_SECRET / X_ACCESS_TOKEN / X_ACCESS_SECRET
- *   HAL_X_CONSUMER_KEY / HAL_X_CONSUMER_SECRET / HAL_X_ACCESS_TOKEN / HAL_X_ACCESS_SECRET
+ *   -- すなくん用 --
+ *   SUNAKUN_X_USERNAME  : Xユーザー名
+ *   SUNAKUN_X_PASSWORD  : Xパスワード
+ *   -- HAL用 --
+ *   HAL_X_USERNAME      : Xユーザー名
+ *   HAL_X_PASSWORD      : Xパスワード
  */
 
-import { TwitterApi } from 'twitter-api-v2';
+import { Scraper } from 'agent-twitter-client';
 
-const account     = process.env.X_ACCOUNT || 'sunakun';
-const tweetText   = process.env.TWEET_TEXT || '';
-const oauth2Token = process.env.X_OAUTH2_TOKEN || '';
+const account   = process.env.X_ACCOUNT || 'sunakun';
+const tweetText = process.env.TWEET_TEXT || '';
 
 if (!tweetText.trim()) {
   console.log('⚠️ 投稿テキストが空です。スキップします。');
   process.exit(0);
 }
 
-// 文字数チェック（280バイト = 日本語140文字相当）
+const isHal = account === 'hal';
+const username = isHal ? process.env.HAL_X_USERNAME : process.env.SUNAKUN_X_USERNAME;
+const password = isHal ? process.env.HAL_X_PASSWORD : process.env.SUNAKUN_X_PASSWORD;
+
+if (!username || !password) {
+  console.error(`❌ ${account.toUpperCase()} のXログイン情報が未設定です。`);
+  console.error('GitHub Secrets に以下を設定してください:');
+  console.error(isHal ? '  HAL_X_USERNAME / HAL_X_PASSWORD' : '  SUNAKUN_X_USERNAME / SUNAKUN_X_PASSWORD');
+  process.exit(1);
+}
+
+// 文字数チェック
 function countTwitterChars(text) {
   let count = 0;
   for (const char of text) {
@@ -32,74 +45,70 @@ function countTwitterChars(text) {
 
 const charCount = countTwitterChars(tweetText);
 console.log(`📝 投稿文字数: ${charCount}/280`);
+console.log(`🐦 [${account.toUpperCase()}] @${username} でXに投稿します...`);
 console.log(`投稿内容:\n${tweetText}\n`);
 
-if (charCount > 280) {
-  console.error(`❌ 文字数オーバー: ${charCount}文字`);
-  process.exit(1);
-}
-
-async function saveOutput(tweetId) {
-  if (process.env.GITHUB_OUTPUT) {
-    const fs = await import('fs');
-    fs.appendFileSync(process.env.GITHUB_OUTPUT, `tweet_id=${tweetId}\n`);
-  }
-}
-
-// ── OAuth 2.0 Bearer Token 優先 ──
-if (oauth2Token) {
-  console.log(`🔑 [${account.toUpperCase()}] OAuth 2.0 Bearer Token 方式で投稿...`);
-  try {
-    const client = new TwitterApi(oauth2Token);
-    const { data } = await client.v2.tweet(tweetText);
-    console.log(`✅ X投稿成功！ Tweet ID: ${data.id}`);
-    console.log(`🔗 https://x.com/i/web/status/${data.id}`);
-    await saveOutput(data.id);
-    process.exit(0);
-  } catch (err) {
-    const errData = err?.data || err?.message;
-    console.error('❌ OAuth2投稿失敗:', JSON.stringify(errData));
-    console.log('🔄 OAuth 1.0a フォールバックを試みます...');
-  }
-}
-
-// ── OAuth 1.0a フォールバック ──
-const isHal = account === 'hal';
-console.log(`🔑 [${account.toUpperCase()}] OAuth 1.0a 方式で投稿...`);
-
-const keys = {
-  appKey:       isHal ? process.env.HAL_X_CONSUMER_KEY    : process.env.X_CONSUMER_KEY,
-  appSecret:    isHal ? process.env.HAL_X_CONSUMER_SECRET : process.env.X_CONSUMER_SECRET,
-  accessToken:  isHal ? process.env.HAL_X_ACCESS_TOKEN    : process.env.X_ACCESS_TOKEN,
-  accessSecret: isHal ? process.env.HAL_X_ACCESS_SECRET   : process.env.X_ACCESS_SECRET,
-};
-
-const missingKeys = Object.entries(keys).filter(([, v]) => !v).map(([k]) => k);
-if (missingKeys.length > 0) {
-  console.error(`❌ APIキー未設定: ${missingKeys.join(', ')}`);
-  process.exit(1);
-}
-
 try {
-  const client = new TwitterApi(keys);
-  const { data } = await client.v2.tweet(tweetText);
+  const scraper = new Scraper();
 
-  console.log(`✅ X投稿成功！ Tweet ID: ${data.id}`);
-  console.log(`🔗 https://x.com/i/web/status/${data.id}`);
-  await saveOutput(data.id);
+  // ログイン
+  console.log('🔐 Xにログイン中...');
+  await scraper.login(username, password);
+
+  const loggedIn = await scraper.isLoggedIn();
+  if (!loggedIn) {
+    console.error('❌ Xへのログインに失敗しました。ユーザー名/パスワードを確認してください。');
+    process.exit(1);
+  }
+  console.log('✅ ログイン成功');
+
+  // ツイート投稿
+  console.log('📤 投稿中...');
+  const result = await scraper.sendTweet(tweetText);
+
+  // レスポンスからツイートIDを抽出
+  let tweetId = '';
+  try {
+    const body = await result.json();
+    tweetId = body?.data?.create_tweet?.tweet_results?.result?.rest_id || '';
+  } catch (e) {
+    // JSONパース失敗時はレスポンスステータスで判定
+  }
+
+  if (result.ok || result.status === 200) {
+    console.log(`✅ X投稿成功！${tweetId ? ` Tweet ID: ${tweetId}` : ''}`);
+    if (tweetId) console.log(`🔗 https://x.com/${username}/status/${tweetId}`);
+
+    // GitHub Actions の出力にセット
+    if (process.env.GITHUB_OUTPUT) {
+      const fs = await import('fs');
+      fs.appendFileSync(process.env.GITHUB_OUTPUT, `tweet_id=${tweetId}\n`);
+      fs.appendFileSync(process.env.GITHUB_OUTPUT, `success=true\n`);
+    }
+  } else {
+    console.error(`❌ X投稿失敗 (HTTP ${result.status})`);
+    try {
+      const errBody = await result.text();
+      console.error('レスポンス:', errBody.slice(0, 500));
+    } catch (e) {}
+
+    if (process.env.GITHUB_OUTPUT) {
+      const fs = await import('fs');
+      fs.appendFileSync(process.env.GITHUB_OUTPUT, `success=false\n`);
+    }
+    process.exit(1);
+  }
+
+  // ログアウト
+  await scraper.logout();
+  console.log('🔓 ログアウト完了');
   process.exit(0);
 
 } catch (err) {
-  console.error('❌ X投稿エラー:');
-  console.error(JSON.stringify(err?.data || err?.message || err, null, 2));
-
-  const errStr = JSON.stringify(err?.data || '');
-  if (errStr.includes('CredentialsDepleted')) {
-    console.error('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.error('⚠️  X API の月次クレジットが枯渇しています');
-    console.error('   翌月初めに自動リセットされます');
-    console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.error('❌ エラー:', err.message || err);
+  if (process.env.GITHUB_OUTPUT) {
+    const fs = await import('fs');
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `success=false\n`);
   }
-
   process.exit(1);
 }
