@@ -6,7 +6,7 @@ import AIToolchainMap from '../components/OperationMap/AIToolchainMap.jsx';
 // ============================================
 // Home View — SaaS Stack ダッシュボード（統合版）
 // ============================================
-function HomeView({ staff, projects, apiKeys, currentUser, onOpenChat, onOpenProjects, onOpenRoadmap, onOpenSettings, onBriefing, onOpenDiscussion, onOpenX, onOpenYouTube, onLogout, chatHistory, monitoredApps = [], setMonitoredApps, onOpenAttendance, onOpenSales, onOpenAffiliate, onOpenPipeline, onOpenHAL, onOpenPrompts, showToast, gasUrls }) {
+function HomeView({ staff, projects, apiKeys, currentUser, onOpenChat, onOpenProjects, onOpenRoadmap, onOpenSettings, onBriefing, onOpenDiscussion, onOpenX, onOpenYouTube, onLogout, chatHistory, monitoredApps = [], setMonitoredApps, onOpenAttendance, onOpenSales, onOpenAffiliate, onOpenPipeline, onOpenHAL, onOpenPrompts, onOpenMonetization, showToast, gasUrls }) {
   const [briefingLoading, setBriefingLoading] = useState(false);
   const today = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
   const hasKey = apiKeys?.anthropic || apiKeys?.gemini;
@@ -65,6 +65,7 @@ function HomeView({ staff, projects, apiKeys, currentUser, onOpenChat, onOpenPro
                 <span className="dash-project-code">{currentUser.projectCode}</span>
               </div>
             )}
+            <button className="btn btn-ghost btn-sm" onClick={onOpenMonetization} title="収益化ダッシュボード">💰</button>
             <button className="btn btn-ghost btn-sm" onClick={onOpenHAL} title="HAL / すなくん 投稿管理">🎭</button>
             <button className="btn btn-ghost btn-sm" onClick={onOpenPrompts} title="プロンプト集（Claude.ai用）">📋</button>
             <button className="btn btn-ghost btn-sm" onClick={handleBriefing} disabled={briefingLoading} title="朝ブリーフィング送信">

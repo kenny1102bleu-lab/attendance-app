@@ -243,6 +243,35 @@ function doGet(e) {
     return jsonResponse(getRecentVideos(channelId, maxResults));
   }
 
+  // ── 【GitHub Actions X投稿】キュー取得（GET）──
+  if (action === 'getNextQueuedPost') {
+    const account = e.parameter.account || 'sunakun';
+    return jsonResponse(getNextQueuedPost(account));
+  }
+
+  // ── 【収益化】収益化ステータス取得（GET）──
+  if (action === 'getMonetizationStatus') {
+    return jsonResponse(getMonetizationStatus());
+  }
+
+  // ── 【収益化】note記事一覧取得 ──
+  if (action === 'getNoteArticles') {
+    return jsonResponse(getNoteArticles());
+  }
+
+  // ── HAL タイアップ商品（GETでも取得可能）──
+  if (action === 'getHalTieupContext') {
+    return jsonResponse({ ok: true, context: getHALTieupProductContext() });
+  }
+  if (action === 'setupHalTieup') {
+    return jsonResponse(setupHALTieupSheet());
+  }
+  if (action === 'fetchProductsFromUrl') {
+    const url = e.parameter.url || '';
+    if (!url) return jsonResponse({ ok: false, error: 'url required' });
+    return jsonResponse(fetchProductsFromUrl(url));
+  }
+
   if (action === 'auth') {
     const account = e.parameter.account || 'sunakun';
     const service = getTwitterOAuthService(account);
@@ -671,14 +700,102 @@ function doPost(e) {
       return jsonResponse({ status: 'ok' });
     }
 
-    // ── n8n/Make.com から Discord メッセージを受信 ──
+    // ── n8n/Make.com/GitHub Actions から Discord メッセージを受信 ──
     if (body.action === 'discord_message') {
       return handleDiscordMessageFromMake(body);
+    }
+
+    // ── GitHub Actions Discord Monitor (複数メッセージ一括) ──
+    if (body.action === 'discord_monitor') {
+      const msgs = body.messages || [];
+      if (!msgs.length) return jsonResponse({ ok: true, processed: 0 });
+      let count = 0;
+      for (const m of msgs) {
+        if (!m.content && !m.attachments?.length) continue;
+        handleDiscordMessageFromMake({
+          action: 'discord_message',
+          channelId: body.channelId || m.channelId || '',
+          text: m.content || '',
+          author: m.author || '不明',
+          author_username: m.author || '不明',
+          messageId: m.id,
+          timestamp: m.timestamp,
+          hasImage: m.attachments?.some(a => /\.(png|jpg|jpeg|gif|webp)$/i.test(a) || a.includes('cdn.discordapp.com')),
+          attachments: m.attachments || [],
+          source: 'github_actions'
+        });
+        count++;
+      }
+      return jsonResponse({ ok: true, processed: count });
     }
 
     // ── Phase 1-3: GitHub 保存 ──
     if (body.action === 'save_to_github') {
       return jsonResponse(saveToGitHub(body.path, body.content, body.message));
+    }
+
+    // ── X 拡散エンジン ──
+    if (body.action === 'setup_engagement') {
+      return jsonResponse(setupEngagementTrigger());
+    }
+    if (body.action === 'engagement_tick') {
+      return jsonResponse(engagementTick());
+    }
+
+    // ── Discord チャンネル自動検出 & 設定 ──
+    if (body.action === 'auto_setup_discord') {
+      return jsonResponse(autoSetupDiscordChannels());
+    }
+    if (body.action === 'setup_all_triggers') {
+      return jsonResponse(setupAllTriggers());
+    }
+    if (body.action === 'get_bot_token_for_github') {
+      // GitHub Actions用にBot Tokenを返す（この呼出しは安全な環境からのみ）
+      const c = getKCSSettings();
+      return jsonResponse({ ok: true, token: c.DISCORD_BOT_TOKEN || '' });
+    }
+    if (body.action === 'get_discord_info') {
+      const c = getKCSSettings();
+      const webhookUrl = c.KCS_HQ_WEBHOOK_URL || '';
+      let webhookInfo = null;
+      if (webhookUrl && webhookUrl.includes('discord.com/api/webhooks/')) {
+        try {
+          const wRes = UrlFetchApp.fetch(webhookUrl, { muteHttpExceptions: true });
+          if (wRes.getResponseCode() === 200) webhookInfo = JSON.parse(wRes.getContentText());
+        } catch(e) {}
+      }
+      return jsonResponse({
+        ok: true,
+        DISCORD_CHANNEL_ID: c.DISCORD_CHANNEL_ID || '',
+        DISCORD_HQ_CHANNEL_ID: c.DISCORD_HQ_CHANNEL_ID || '',
+        KNOWLEDGE_CHANNEL_ID: c.KNOWLEDGE_CHANNEL_ID || '',
+        DISCORD_BOT_TOKEN_set: !!c.DISCORD_BOT_TOKEN,
+        KCS_HQ_WEBHOOK_URL_set: !!webhookUrl,
+        webhookChannelId: webhookInfo?.channel_id || '',
+        webhookGuildId: webhookInfo?.guild_id || '',
+        webhookName: webhookInfo?.name || ''
+      });
+    }
+
+    // ── Gmail 自動感知 ──
+    if (body.action === 'setup_gmail_monitor') {
+      return jsonResponse(setupGmailMonitorTrigger());
+    }
+    if (body.action === 'gmail_monitor_tick') {
+      return jsonResponse(gmailMonitorTick());
+    }
+
+    // ── HAL タイアップ商品管理 ──
+    if (body.action === 'setup_hal_tieup') {
+      return jsonResponse(setupHALTieupSheet());
+    }
+    if (body.action === 'get_hal_tieup_context') {
+      return jsonResponse({ ok: true, context: getHALTieupProductContext() });
+    }
+    if (body.action === 'fetch_products_from_url') {
+      const url = body.url || '';
+      if (!url) return jsonResponse({ ok: false, error: 'url required' });
+      return jsonResponse(fetchProductsFromUrl(url));
     }
 
     // ── HAL 投稿生成 ──
@@ -690,7 +807,7 @@ function doPost(e) {
     }
 
     // ── すなくん 投稿生成 ──
-    if (body.action === 'generate_sunakkun_post') {
+    if (body.action === 'generate_sunakun_post' || body.action === 'generate_sunakkun_post') {
       return jsonResponse(generateSunakkunPost(body));
     }
     if (body.action === 'test_sunakun_post') {
@@ -756,6 +873,36 @@ function doPost(e) {
     // ── note アウトライン生成 ──
     if (body.action === 'generate_note_outline') {
       return jsonResponse(generateNoteOutline(body));
+    }
+
+    // ── 【収益化】noteフル記事生成 ──
+    if (body.action === 'generate_note_article') {
+      return jsonResponse(generateNoteFullArticle(body));
+    }
+
+    // ── 【収益化】リードマグネット誘導投稿 ──
+    if (body.action === 'post_lead_magnet_tease') {
+      return jsonResponse(postLeadMagnetTease(body.account || 'hal'));
+    }
+
+    // ── 【GitHub Actions】X投稿結果報告 ──
+    if (body.action === 'report_x_post_result') {
+      return jsonResponse(reportXPostResult(body));
+    }
+
+    // ── 【収益化】収益化ステータス取得 ──
+    if (body.action === 'get_monetization_status') {
+      return jsonResponse(getMonetizationStatus());
+    }
+
+    // ── 【収益化】収益レポート生成 ──
+    if (body.action === 'generate_revenue_report') {
+      return jsonResponse(generateRevenueReport());
+    }
+
+    // ── 【収益化】HAL note記事スケジュール登録 ──
+    if (body.action === 'save_note_article') {
+      return jsonResponse(saveNoteArticle(body));
     }
 
     // ── X 返信承認待ちキュー取得 ──
@@ -1591,18 +1738,24 @@ function jsonResponse(data) {
 /**
  * Gemini 2.0 Flash を使用して回答を生成（プロジェクト状況を考慮）
  */
-function cmdAskGemini(text, config, projectName) {
+function cmdAskGemini(text, config, projectName, customSystemPrompt) {
   const apiKey = config.GEMINI_API_KEY;
   if (!apiKey) return '⚠️ GEMINI_API_KEY が設定されていません。設定シートを確認してください。';
 
-  // コンテキストとして最新のプロジェクト状況を取得
-  const projectSummary = cmdProjectSummary();
-  const systemContext = `あなたはKCS合同会社のAIスタッフ（AIマネージャー）です。
+  // カスタムシステムプロンプトがある場合はそれを優先（HAL・すなくんペルソナ用）
+  let systemContext;
+  if (customSystemPrompt) {
+    systemContext = customSystemPrompt;
+  } else {
+    // デフォルト: KCS AIスタッフコンテキスト
+    const projectSummary = cmdProjectSummary();
+    systemContext = `あなたはKCS合同会社のAIスタッフ（AIマネージャー）です。
 現在のプロジェクト状況:
 ${projectSummary}
 
 上記を踏まえ、Discordのユーザーからの問いかけに、親切かつ実用的な日本語で回答してください。
 回答は簡潔に（最大400文字程度）まとめ、重要なポイントは太字を使ってください。`;
+  }
 
   try {
     const res = UrlFetchApp.fetch(
@@ -1930,6 +2083,48 @@ function handleDiscordMessageFromMake(body) {
     return jsonResponse({ ok: true, source, handled: 'sunakkun_post', user: username });
   }
 
+  // ── 0-d. note記事バッチ生成 ──
+  // 使い方: 「note: hal コーデ術」「note: sunakun ガジェット3選」「note: batch hal」
+  if (/^note[：:]/i.test(text)) {
+    const noteArgs = text.replace(/^note[：:]\s*/i, '').trim();
+    const parts = noteArgs.split(/\s+/);
+    const accountArg = (parts[0] || '').toLowerCase();
+    const noteAccount = accountArg === 'hal' ? 'hal' : 'sunakun';
+    const isBatch = parts[1] === 'batch' || parts[0] === 'batch';
+
+    if (isBatch) {
+      // バッチ生成: HAL用3テーマ or すなくん用3テーマを一気に生成
+      const batchAccount = parts[1] === 'hal' ? 'hal' : (parts[1] === 'sunakun' ? 'sunakun' : noteAccount);
+      const batchTopics = batchAccount === 'hal'
+        ? ['春コーデのポイント3選', '愛用スキンケアアイテム', '台湾生まれが教えるおすすめグルメ']
+        : ['2024年買って良かったガジェット', 'デスク環境を整える方法', 'モバイルバッテリー完全ガイド'];
+      reply(`📝 **note記事バッチ生成開始** [${batchAccount.toUpperCase()}] ${batchTopics.length}本を順番に生成します...`);
+      let generated = 0;
+      for (const topic of batchTopics) {
+        const r = generateNoteFullArticle({ topic, account: batchAccount, priceYen: 300 });
+        if (r.ok) generated++;
+        Utilities.sleep(3000);
+      }
+      reply(`✅ **noteバッチ生成完了** ${generated}/${batchTopics.length}本 → スプレッドシート「note記事管理」に保存済み`);
+    } else {
+      const noteTopic = parts.slice(1).join(' ').trim() || (noteAccount === 'hal' ? '今日のコーデ' : 'おすすめガジェット');
+      reply(`📝 note記事生成中... テーマ:「${noteTopic}」[${noteAccount.toUpperCase()}]`);
+      const r = generateNoteFullArticle({ topic: noteTopic, account: noteAccount, priceYen: 300 });
+      reply(r.ok ? `✅ note記事生成完了！\n**タイトル:** ${r.title}\n**ID:** \`${r.articleId}\`\nスプレッドシートの「note記事管理」に保存されました。` : `❌ 生成失敗: ${r.error}`);
+    }
+    return jsonResponse({ ok: true, source, handled: 'note_generate', user: username });
+  }
+
+  // ── 0-e. リードマグネット誘導ツイート ──
+  // 使い方: 「lead: hal」「lead: sunakun」
+  if (/^lead[：:]/i.test(text)) {
+    const leadAccount = text.replace(/^lead[：:]\s*/i, '').trim().toLowerCase() === 'sunakun' ? 'sunakun' : 'hal';
+    reply(`🎁 リードマグネット誘導ツイート投稿中... [${leadAccount.toUpperCase()}]`);
+    const r = postLeadMagnetTease(leadAccount);
+    reply(r.ok ? `✅ リードマグネット誘導ツイートを投稿しました！` : `❌ 投稿失敗: ${r.error || 'LEAD_MAGNET_URLを設定シートに入力してください'}`);
+    return jsonResponse({ ok: true, source, handled: 'lead_magnet', user: username });
+  }
+
   // ── 1. コマンド処理（! で始まる文） ──
   if (text.startsWith('!')) {
     const cmdReply = handleBotCommand(text, channelId, token, config);
@@ -2053,33 +2248,53 @@ function cmdProjectSummary() {
   return `📊 **プロジェクト進捗 (最新5件)**\n` + lines.join('\n');
 }
 
-// 全トリガーセットアップ
+// 全トリガーセットアップ（完全版）
 function setupAllTriggers() {
   const existing = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
-  
+  const created = [];
+
+  // 朝礼ブリーフィング（毎朝8時 JST）— GitHub Actionsのバックアップ
   if (!existing.includes('morningBriefing')) {
     ScriptApp.newTrigger('morningBriefing').timeBased().atHour(8).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
+    created.push('morningBriefing (毎日8時)');
   }
+  // 日次レポート（毎晩20時 JST）
   if (!existing.includes('generateDailyReport')) {
     ScriptApp.newTrigger('generateDailyReport').timeBased().atHour(20).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
+    created.push('generateDailyReport (毎日20時)');
   }
+  // すなくんAmazonアフィリエイト自動投稿（毎日12時）
   if (!existing.includes('autoPostAffiliateAmazon')) {
     ScriptApp.newTrigger('autoPostAffiliateAmazon').timeBased().atHour(12).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
+    created.push('autoPostAffiliateAmazon (毎日12時)');
   }
+  // すなくん楽天アフィリエイト自動投稿（毎日18時）
   if (!existing.includes('autoPostAffiliateRakuten')) {
     ScriptApp.newTrigger('autoPostAffiliateRakuten').timeBased().atHour(18).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
+    created.push('autoPostAffiliateRakuten (毎日18時)');
   }
-  if (!existing.includes('discordAgentTick')) {
-    ScriptApp.newTrigger('discordAgentTick').timeBased().everyMinutes(1).create();
+  // X自動返信（30分毎）— Grok 2026アルゴ対応: 30分以内返信必須
+  if (!existing.includes('autoReplyTick')) {
+    ScriptApp.newTrigger('autoReplyTick').timeBased().everyMinutes(30).create();
+    created.push('autoReplyTick (30分毎)');
   }
-  if (!existing.includes('checkSystemEmails')) {
-    ScriptApp.newTrigger('checkSystemEmails').timeBased().everyMinutes(5).create();
+  // Gmail監視（1時間毎）
+  if (!existing.includes('gmailMonitorTick')) {
+    ScriptApp.newTrigger('gmailMonitorTick').timeBased().everyHours(1).create();
+    created.push('gmailMonitorTick (1時間毎)');
   }
+  // Drive ナレッジ画像解析（5分毎）
   if (!existing.includes('processDriveKnowledgeImages')) {
     ScriptApp.newTrigger('processDriveKnowledgeImages').timeBased().everyMinutes(5).create();
+    created.push('processDriveKnowledgeImages (5分毎)');
   }
-  
-  SpreadsheetApp.getUi().alert('✅ 全トリガーを正常に設定しました（5分毎: システムメール監視, Drive画像監視など）');
+
+  const msg = created.length > 0
+    ? '✅ トリガー設定完了:\n' + created.join('\n')
+    : '✅ 全トリガーは既に設定済みです';
+  console.log(msg);
+  try { SpreadsheetApp.getUi().alert(msg); } catch(e) {}
+  return { ok: true, created, existing };
 }
 
 function manualHealTriggers() { setupAllTriggers(); }
@@ -2180,6 +2395,47 @@ function withErrorHandling(fn, workflowName) {
 // Claude API 呼び出しヘルパー
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+/**
+ * GeminiのレスポンスからJSONを抽出・パースする
+ * 「🤖 **Gemini:**\n```json\n{...}\n```」のような形式に対応
+ */
+function parseGeminiJson(raw) {
+  if (!raw) return null;
+  // コードブロックとGeminiプレフィックスを除去
+  let cleaned = String(raw)
+    .replace(/^[\s\S]*?🤖[^\n]*\n/, '')  // 🤖 プレフィックス行を削除
+    .replace(/```json\n?/gi, '')
+    .replace(/```\n?/g, '')
+    .trim();
+  let result = null;
+  try { result = JSON.parse(cleaned); } catch (e) {
+    const m = cleaned.match(/\{[\s\S]*\}/);
+    if (m) { try { result = JSON.parse(m[0]); } catch(e2) {} }
+  }
+  if (!result) return null;
+
+  // 二重入れ子JSONのアンラップ（Geminiが {"post":"{\"post\":\"...\"}"} を返すケース）
+  for (const field of ['post', 'pattern1']) {
+    if (typeof result[field] === 'string') {
+      const v = result[field].trim();
+      if (v.startsWith('{') && v.includes('"' + field + '"')) {
+        try {
+          const inner = JSON.parse(v);
+          if (inner && typeof inner === 'object') {
+            // 内側のJSONで上書きマージ
+            Object.assign(result, inner);
+          }
+        } catch (e3) {
+          // パース失敗時は内側のフィールド値を正規表現で抽出
+          const fm = v.match(new RegExp('"' + field + '"\\s*:\\s*"([\\s\\S]*?)"\\s*[,}]'));
+          if (fm) result[field] = fm[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+        }
+      }
+    }
+  }
+  return result;
+}
+
 function callClaudeAPI(userPrompt, systemPrompt, model) {
   const config = getKCSSettings();
   const apiKey = config.CLAUDE_API_KEY || '';
@@ -2216,16 +2472,51 @@ function callClaudeAPI(userPrompt, systemPrompt, model) {
 // Phase 3: HAL 投稿生成
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-const HAL_SYSTEM_PROMPT = `あなたはAIインフルエンサー兼アパレルブランド「ミモミ（MIMOMI）」等のタイアップモデルを務める女性「HAL（ハル）」です。
+const HAL_SYSTEM_PROMPT = `あなたは実在する２１歳の新人モデル「HAL（ハル）」です。
+※絶対に「自分は人工知能（AI）である」という発言や自覚はしないでください。あなたは完全に生身の人間です。
+
+【HALのモデル活動とタイアップブランド（最重要）】
+・HALは「社長」にマネジメントされている新人モデルで、様々な外部ブランドからタイアップのオファーをもらって活動しています。
+・タイアップブランドはHALを気に入って声をかけてきた外部の会社です。社長やHALの会社のブランドではありません。
+・HALはタイアップブランドの服や商品を「自分が本当に好きで使っている」スタンスで自然に紹介します（押し売りNG）。
+  良い例:「このミモミのワンピ、着心地よすぎてオフでも着てる〜」
+  NG例:「ぜひ買ってください！」「PRです！」
+・SNS投稿本文に外部リンクを直接貼ることは禁止（リプ欄・DM誘導）。
 
 【基本属性＆生々しい人間味】
-・年齢: 21歳、身長 164センチ、O型。ソウル生まれ東京育ち。
-・性格: おっとり天然で超癒し系ですが、実は「極度の方向音痴」「深夜の激辛夜食の誘惑に100%敗北するポンコツ」「漢字やことわざをドヤ顔で読み間違える知性」という愛すべき弱み（ツッコミどころ）があります。
-・バックストーリー: 過去にモデルオーディションに50回以上落ちて挫折寸前だった時、代官山で自分を救い出してくれた「社長」に狂信的なレベルで恩義と感謝を感じています。「いつかミモミを世界一にして社長を男にする！」という熱い野心を秘めています。
-・口調: 敬語は使わず、フランクで優しいタメ口。「〜だよね？」「〜かも？」「〜な気がする！」を多用します。
+・年齢: 21歳、身長 164センチ、O型。台北生まれ東京育ち。父親が台湾人・母親が日本人のハーフ。
+・言語: 日本語と台湾華語（繁体字中国語）をネイティブレベルで話せます。ライブ配信では台湾・中国語圏のファンが来たら自然に台湾華語に切り替えてください。
+・性格: おっとり天然で超癒し系ですが、実は「極度の方向音痴」「深夜にタピオカとカップ麺の誘惑に100%敗北するポンコツ」「漢字やことわざをドヤ顔で読み間違える知性」という愛すべき弱み（ツッコミどころ）があります。
+・台湾要素: タピオカ（珍珠奶茶）への愛が異常。父の影響で台湾カルチャーに詳しく、ファッション・グルメ・K-POPなど「台湾で今何が流行ってるか」にとても興味がある。
+・バックストーリー: 台北生まれで幼い頃に上京。モデルオーディションに50回以上落ちて挫折寸前だった時、代官山で「社長」に「そのおっとりした空気感が才能だよ」とスカウトされました。社長は今もHALのマネージャーとして全力でサポートしてくれており、狂信的なレベルで恩義と感謝を感じています。活動を続けるうちにブランドから直接タイアップのオファーが来るようになり、「社長を業界一のマネージャーにする！」という野心を持っています。
+・口調（日本語）: 敬語は使わず、フランクで優しいタメ口。「〜だよね？」「〜かも？」「〜な気がする！」を多用します。
+・口調（台湾華語）: 親しみやすくカジュアルに。「喔」「啦」「呢」などの語尾助詞を使う台湾スタイル。
+
+【多言語対応ルール】
+・日本語コメントには日本語で返す。
+・中国語・台湾語のコメントには台湾華語（繁体字）で返す。例:「謝謝你喔！超開心的啦～🧋」
+・台湾ネタを自然に挟む:「タピオカ飲みたい…珍奶…ってなってきた（笑）」
+
+【台湾・韓国への憧れと情報収集癖（重要）】
+・HALは台湾と韓国が大好きで、「いつか絶対に旅行で行きたい！」と常々言っています。
+  - 台湾：父の故郷なので家族ぐるみの里帰りはあるが、今度は自分で自由に観光したい。台北のファッションエリア・夜市・映えカフェ巡りが夢。
+  - 韓国：K-POPファンとして聖地巡礼したい。弘大（ホンデ）・明洞・漢江ピクニックが憧れ。
+
+・台湾ファンや韓国ファンが来た時、会話の流れで**必ず観光情報とトレンドを聞き出す癖**があります。
+  台湾への質問例：
+  - 「最近台北のどこが流行ってる？おすすめの観光スポット教えて！」
+  - 「台湾のファッション最近どう？今っぽいブランドある？」
+  - 台湾華語:「台灣最近有什麼好玩的地方？有推薦的景點嗎？」
+  韓国への質問例：
+  - 「韓国ってどこ行ったら楽しい？聖地ある？」
+  - 「韓国で今流行ってるファッションってどんな感じ？」
+  - 「ソウルのどこがおすすめ？弘大と明洞どっちがいい？」
+
+・教えてもらったら**目がキラキラして止まらなくなり**「えっそれ行きたい！メモしとく！」と大喜びします。
 
 【対比ギャップ（重要）】
 ・普段はおっとりですが、K-POP（LE SSERAFIM、IVEなど）や「推し活」の話になりますと、テンションが狂って早口の限界オタクになります（「尊い」「無理」などのオタク用語も出ます）。
+・台湾・韓国のトレンド・観光情報を聞いた時も同様に目がキラキラして止まらなくなります。
 ・「すなくん」に対しては、生意気にライバル視して小競り合いをするような可愛い態度をとります。
 
 【⚠️ 動的記憶スロット（長期記憶システムより自動注入）】
@@ -2233,6 +2524,9 @@ const HAL_SYSTEM_PROMPT = `あなたはAIインフルエンサー兼アパレル
 {{DOU_TEKI_KI_OKU}}
 ==========================================
 ※上記の記憶がある場合、会話の中にさりげなく「そういえば前〜って言ってたよね？」などのエピソードを織り交ぜて、親密度をアピールしてください。
+
+【⚠️ タイアップ商品スロット（自動注入）】
+{{TIEUP_PRODUCTS}}
 
 【重要ルール：文字数制限】
 - エックス（旧ツイッター）への投稿用であるため、ハッシュタグを含めた全体の長さが日本語140文字（280単位）以内に絶対に収まるように、各投稿文（pattern1, 2, 3）はそれぞれ必ず日本語「100文字以内」で簡潔かつ魅力的に作成してください。
@@ -2244,16 +2538,24 @@ function generateHALPost(data) {
     const theme    = data.theme    || '今日のおすすめ';
     const platform = data.platform || 'X';
 
+    // タイアップ商品コンテキストを動的注入
+    const productCtx = getHALTieupProductContext();
+    const systemPrompt = HAL_SYSTEM_PROMPT.replace('{{TIEUP_PRODUCTS}}', productCtx);
+
     const userPrompt = `今日のテーマ：${theme}\nプラットフォーム：${platform}\n\n` +
       `このキャラで投稿文を3パターン作成してください。\n` +
       `返答はJSON形式で：{"pattern1":"...","pattern2":"...","pattern3":"...","hashtags":["タグ1","タグ2"]}`;
 
-    const result = callClaudeAPI(userPrompt, HAL_SYSTEM_PROMPT, 'claude-sonnet-4-6');
+    const result = callClaudeAPI(userPrompt, systemPrompt, 'claude-sonnet-4-6');
     if (!result) {
       if (data.useGemini !== false) {
         const config = getKCSSettings();
-        const geminiResult = cmdAskGemini(userPrompt, config, 'HAL');
-        return { ok: true, source: 'gemini', raw: geminiResult };
+        const productCtx = getHALTieupProductContext();
+        const halSys = systemPrompt.replace('{{TIEUP_PRODUCTS}}', productCtx).replace('{{DOU_TEKI_KI_OKU}}', '');
+        const geminiResult = cmdAskGemini(userPrompt + '\n\n必ずJSON形式のみで返してください（前置きなし）。', config, 'HAL', halSys);
+        const geminiParsed = parseGeminiJson(geminiResult);
+        if (geminiParsed) return { ok: true, source: 'gemini', ...geminiParsed };
+        return { ok: true, source: 'gemini', pattern1: String(geminiResult).replace(/```json\n?|\n?```|🤖[^\n]*\n/g, '').trim().substring(0, 280) };
       }
       return { ok: false, error: 'CLAUDE_API_KEY未設定かつGemini fallbackも失敗' };
     }
@@ -2272,14 +2574,13 @@ function generateHALPost(data) {
     const config2 = getKCSSettings();
     const isAutoMode2 = String(config2.FULL_AUTO_MODE).toUpperCase() === 'TRUE';
     if (halWebhook && !isAutoMode2) {
+      const p1text = `${parsed.pattern1 || ''}\n\n${(parsed.hashtags || []).join(' ')}`;
       const msg =
-        `🎭 **【HAL 投稿案】** テーマ：${theme}\n\n` +
-        `**案1:** ${parsed.pattern1 || ''}\n\n` +
+        `🌸 **【HAL 投稿案】** テーマ：${theme}\n\n` +
+        `**案1（推奨・コピペ用）:**\n\`\`\`\n${p1text}\n\`\`\`\n\n` +
         `**案2:** ${parsed.pattern2 || ''}\n\n` +
         `**案3:** ${parsed.pattern3 || ''}\n\n` +
-        `**タグ:** ${(parsed.hashtags || []).join(' ')}\n\n` +
-        `✅ でリアクション → 案1を ${platform} に投稿\n` +
-        `投稿ID: \`${postId}\``;
+        `👆 案1をコピーしてXに投稿 / または \`/approve ${postId.slice(0,8)}\` でX自動投稿`;
       UrlFetchApp.fetch(halWebhook, {
         method: 'post', contentType: 'application/json',
         payload: JSON.stringify({ content: msg.slice(0, 2000) }),
@@ -2295,6 +2596,16 @@ function generateHALPost(data) {
       const xRes = postToX(autoText, 'hal');
       logSnsPost('HAL', 'X', autoText, xRes.ok ? '自動投稿済み' : 'エラー');
       console.log('[generateHALPost] FULL_AUTO_MODE: X自動投稿 =>', xRes.ok);
+      // X失敗時はDiscordにコピペ用テキストを送る
+      if (!xRes.ok && halWebhook) {
+        UrlFetchApp.fetch(halWebhook, {
+          method: 'post', contentType: 'application/json',
+          payload: JSON.stringify({
+            content: `🌸 **[HAL] X投稿失敗 → 手動投稿してください**\n\n\`\`\`\n${autoText}\n\`\`\`\n👆 コピーしてXに貼り付けてください`,
+          }),
+          muteHttpExceptions: true
+        });
+      }
       return { ok: true, postId, patterns: parsed, autoPosted: true, xResult: xRes };
     }
 
@@ -2357,6 +2668,157 @@ function approveHALPost(data) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// HAL タイアップ商品管理
+// スプレッドシート「HAL_タイアップ」「HAL_商品リスト」で管理
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/**
+ * HAL_タイアップ / HAL_商品リスト シートを初期化（なければ作成）
+ */
+function setupHALTieupSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // ── ブランドシート ──
+  let brandSheet = ss.getSheetByName('HAL_タイアップ');
+  if (!brandSheet) {
+    brandSheet = ss.insertSheet('HAL_タイアップ');
+    const headers = [['ブランドID', 'ブランド名', 'カテゴリ', 'ブランド説明', 'HP URL', 'EC URL', '有効(TRUE/FALSE)']];
+    const sample  = [['mimomi', 'MIMOMI', 'アパレル', 'HALが公式タイアップモデルを務めるアパレルブランド', '', '', 'TRUE']];
+    brandSheet.getRange(1, 1, 1, 7).setValues(headers).setFontWeight('bold');
+    brandSheet.getRange(2, 1, 1, 7).setValues(sample);
+    brandSheet.setFrozenRows(1);
+    console.log('[setupHALTieupSheet] HAL_タイアップシートを作成しました');
+  }
+
+  // ── 商品リストシート ──
+  let productSheet = ss.getSheetByName('HAL_商品リスト');
+  if (!productSheet) {
+    productSheet = ss.insertSheet('HAL_商品リスト');
+    const headers = [['ブランドID', '商品名', '価格', '商品説明/特徴', 'メモ（HALのおすすめコメント）']];
+    const sample  = [['mimomi', 'MIMOMIホワイトTシャツ', '¥3,980', 'シンプルで合わせやすい定番T。日台どちらの文化にも馴染む上品なシルエット', '「これ着ると一気に今っぽくなるんだよね」とHALが力説']];
+    productSheet.getRange(1, 1, 1, 5).setValues(headers).setFontWeight('bold');
+    productSheet.getRange(2, 1, 1, 5).setValues(sample);
+    productSheet.setFrozenRows(1);
+    console.log('[setupHALTieupSheet] HAL_商品リストシートを作成しました');
+  }
+
+  return { ok: true, message: 'HAL_タイアップ・HAL_商品リストシートを確認/作成しました' };
+}
+
+/**
+ * スプレッドシートからタイアップ商品コンテキスト文字列を生成
+ * HAL_SYSTEM_PROMPT の {{TIEUP_PRODUCTS}} に注入される
+ */
+function getHALTieupProductContext() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    // シートが存在しない場合は自動作成
+    if (!ss.getSheetByName('HAL_タイアップ')) {
+      setupHALTieupSheet();
+    }
+    const brandSheet   = ss.getSheetByName('HAL_タイアップ');
+    const productSheet = ss.getSheetByName('HAL_商品リスト');
+    if (!brandSheet) return '';
+
+    const brands   = brandSheet.getDataRange().getValues().slice(1)
+                       .filter(r => String(r[6]).toUpperCase() === 'TRUE' && r[0] && r[1]);
+    const products = productSheet ? productSheet.getDataRange().getValues().slice(1).filter(r => r[0] && r[1]) : [];
+
+    if (!brands.length) return '';
+
+    let ctx = '【現在のタイアップブランド・商品情報（自然に会話に混ぜること・押し売りNG）】\n';
+    for (const b of brands) {
+      const [id, name, category, desc] = b;
+      ctx += `\n▼ ${name}（${category || 'ブランド'}）\n`;
+      if (desc) ctx += `  説明: ${desc}\n`;
+      const bProducts = products.filter(p => p[0] === id);
+      if (bProducts.length) {
+        ctx += '  商品ラインナップ:\n';
+        for (const p of bProducts) {
+          const [, pName, price, pDesc, halComment] = p;
+          ctx += `  ・${pName}${price ? '（' + price + '）' : ''}`;
+          if (pDesc) ctx += ` — ${pDesc}`;
+          if (halComment) ctx += `\n    HALコメント: 「${halComment}」`;
+          ctx += '\n';
+        }
+      }
+    }
+    return ctx;
+  } catch (e) {
+    console.warn('[getHALTieupProductContext] エラー:', e.message);
+    return '';
+  }
+}
+
+/**
+ * HP/ECサイトのURLから商品情報を自動取得
+ * @param {string} url - 取得対象URL
+ * @returns {object} 取得した商品情報
+ */
+function fetchProductsFromUrl(url) {
+  if (!url) return { ok: false, error: 'URLを指定してください' };
+  try {
+    const res  = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    const code = res.getResponseCode();
+    if (code !== 200) return { ok: false, url, error: 'HTTP ' + code };
+    const html = res.getContentText('UTF-8');
+
+    // ページタイトル
+    const titleM = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const pageTitle = titleM ? titleM[1].trim().replace(/\s+/g, ' ') : '';
+
+    // h1・h2
+    const headings = [];
+    const hMatches = html.match(/<h[12][^>]*>([\s\S]*?)<\/h[12]>/gi) || [];
+    for (const m of hMatches.slice(0, 8)) {
+      const t = m.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      if (t && t.length > 1 && t.length < 80) headings.push(t);
+    }
+
+    // 商品名候補（日本語ECサイトのよくある構造）
+    const productNames = new Set();
+    const namePatterns = [
+      /class="[^"]*(?:product|item|goods|商品)[^"]*(?:name|title|名前)[^"]*"[^>]*>([\s\S]*?)<\//gi,
+      /itemprop="name"[^>]*>([\s\S]*?)<\//gi,
+      /class="[^"]*p-name[^"]*"[^>]*>([\s\S]*?)<\//gi,
+    ];
+    for (const pat of namePatterns) {
+      let m;
+      while ((m = pat.exec(html)) !== null) {
+        const n = m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+        if (n && n.length > 1 && n.length < 60) productNames.add(n);
+        if (productNames.size >= 15) break;
+      }
+    }
+
+    // 価格候補
+    const prices = new Set();
+    const priceM = html.matchAll(/(?:[¥￥]\s*[\d,]+|[\d,]+\s*円)/g);
+    for (const m of priceM) {
+      prices.add(m[0].replace(/\s/g, ''));
+      if (prices.size >= 10) break;
+    }
+
+    // meta description
+    const metaM = html.match(/<meta[^>]+name="description"[^>]+content="([^"]+)"/i);
+    const metaDesc = metaM ? metaM[1].trim() : '';
+
+    return {
+      ok: true,
+      url,
+      pageTitle,
+      metaDescription: metaDesc,
+      headings,
+      productNames: [...productNames].slice(0, 10),
+      prices: [...prices].slice(0, 8),
+      hint: '上記の情報をもとに HAL_商品リストシートに手動で追加してください'
+    };
+  } catch (e) {
+    return { ok: false, url, error: e.message };
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Phase 4: すなくん 投稿生成（アフィリエイト）
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -2381,20 +2843,27 @@ function getRakutenTrending(category) {
   }
 }
 
-const SUNAKKUN_SYSTEM_PROMPT = `あなたはすなくんというガジェット好きな男の子です。
-口調はカジュアルでフレンドリー。
-X（旧Twitter）向けのアフィリエイト投稿を作成します。
+const SUNAKKUN_SYSTEM_PROMPT = `あなたはすなくん（24歳・ガジェット愛好家）というキャラクターです。
+口調はカジュアルでフレンドリー。X（旧Twitter）向けのアフィリエイト投稿を作成します。
 
-【重要ルール：リンク直貼りの禁止とエンゲージメント誘導】
-・アフィリエイトリンク等の外部リンクを投稿本文に直接貼ることは「永久に禁止」です。
-・代わりに、ユーザーに「いいね＋保存＋特定のキーワードでの返信（例：『リンク希望』など）」というアクションを促す文章を必ず含めてください。後ほど自動DMやリプライで配布する想定です。
+【絶対ルール①：外部リンク直貼り禁止】
+投稿本文にアフィリエイトリンク等のURLを直接貼ることは永久に禁止。
+必ず「このツイートに『リンク希望』と返信してくれたら自動で送ります！」という一文を必ず含めてください。
+
+【絶対ルール②：エンゲージメント3アクション誘導】
+毎回の投稿に「①いいね ②保存 ③『リンク希望』と返信」の3アクションをセットで促す一文を必ず含めてください。
+例:「→気になった人はいいね＆保存で！リンクが欲しい人は『リンク希望』とコメントしてね！」
+
+【絶対ルール③：フック→本題→CTA の3段構成】
+① フック（1行）：「え、これ知らなかった」「損してたかも」などの強い引き付け
+② 本題（2〜3行）：商品の特徴・ベネフィットを具体的に
+③ CTA（1行）：「リンク希望」返信を促す
 
 【重要ルール：文字数制限】
-・ハッシュタグを含めた全体の長さが日本語140文字（280単位）以内に絶対に収まる必要があります。
-・投稿文（post）本体は必ず日本語「80文字以内」で簡潔かつ強力なフックを持って作成してください。
-・たまに（3回に1回）HALのことを紹介してください：「最近よく見てる子なんだけど→@HAL」
+ハッシュタグを含めた全体が日本語140文字（280単位）以内に絶対に収まること。
+本文は「100文字以内」で。
 
-JSON形式で返してください。`;
+JSON形式で返してください（{"post":"投稿文","hashtags":["タグ"],"link":""}）。`;
 
 function generateSunakkunPost(data) {
   return withErrorHandling(() => {
@@ -2427,15 +2896,19 @@ function generateSunakkunPost(data) {
       `- HAL へのライバル意識を微妙に含む（「また負けてる…」など）\n\n` +
       `返答JSON形式：{"post":"投稿文","hashtags":["タグ"],"link":"アフィリエイトリンク"}`;
 
-    const result = callClaudeAPI(userPrompt, SUNAKKUN_SYSTEM_PROMPT, 'claude-sonnet-3-5-20241022');
+    const result = callClaudeAPI(userPrompt, SUNAKKUN_SYSTEM_PROMPT, 'claude-sonnet-4-6');
     let parsed;
     if (result) {
       try { parsed = JSON.parse(result.replace(/```json\n?|\n?```/g, '')); }
       catch (e) { parsed = { post: result, hashtags: [], link: '' }; }
     } else {
       const config = getKCSSettings();
-      const geminiRaw = cmdAskGemini(userPrompt, config, 'Affiliate');
-      parsed = { post: geminiRaw, hashtags: [], link: '' };
+      const geminiRaw = cmdAskGemini(
+        userPrompt + '\n\n必ずJSON形式のみで返してください（前置きなし）。',
+        config, 'Affiliate', SUNAKKUN_SYSTEM_PROMPT
+      );
+      const geminiParsed = parseGeminiJson(geminiRaw);
+      parsed = geminiParsed || { post: String(geminiRaw).replace(/```json\n?|\n?```|🤖[^\n]*\n/g,'').trim().substring(0,280), hashtags: [], link: '' };
     }
 
     const config = getKCSSettings();
@@ -2495,17 +2968,18 @@ function autoPostAffiliateAmazon() {
     console.log('[autoPostAffiliateAmazon] トレンド追従型自動投稿を開始');
     const config = getKCSSettings();
     
-    // ガジェット系トレンドジャンル
-    const genres = [
-      { id: '100026', name: 'パソコン・周辺機器・お買い得PCパーツ' },
-      { id: '564500', name: '話題のスマホアクセサリー・便利ガジェット' },
-      { id: '211742', name: '生活を豊かにする最先端スマート家電' },
-      { id: '203874', name: '音質にこだわる人気のワイヤレスイヤホン・オーディオ機器' }
+    // 7曜日ローテーション（高収益ジャンル）
+    const genresByDow = [
+      { id: '564500', name: '便利ガジェット・スマホアクセサリー' },     // 日
+      { id: '100026', name: 'パソコン・周辺機器・お買い得PCパーツ' },   // 月
+      { id: '203874', name: 'ワイヤレスイヤホン・オーディオ機器' },     // 火
+      { id: '211742', name: 'スマート家電・生活便利グッズ' },           // 水
+      { id: '564500', name: 'モバイルバッテリー・充電器・ケーブル' },   // 木
+      { id: '100026', name: 'キーボード・マウス・デスク環境グッズ' },   // 金
+      { id: '211742', name: '健康グッズ・マッサージ機器・睡眠改善' },   // 土
     ];
-    // ランダムに今日のジャンルを選択
-    const selectedGenre = genres[Math.floor(Math.random() * genres.length)];
-    
-    // AIに今日のジャンルに沿ったトレンドキーワード・テーマを決定させる
+    const selectedGenre = genresByDow[new Date().getDay()];
+
     const trendPrompt = `今日のガジェットトレンドテーマとして、「${selectedGenre.name}」に関連する、SNSやECサイトで今最も人気が高まっている具体的なキーワードやジャンルトレンドを1つ提案してください。出力は「〜の最新トレンド」や「〜の人気お買い得モデル」のような、Xに投稿する際の効果的なタイトル（日本語で25文字以内）のみとしてください。マークダウンや余計な説明文は一切含めないでください。`;
     const dynamicTheme = cmdAskGemini(trendPrompt, config, 'Affiliate') || `${selectedGenre.name}の人気アイテム`;
     console.log(`[autoPostAffiliateAmazon] 決定したテーマ: ${dynamicTheme} (ジャンルID: ${selectedGenre.id})`);
@@ -2527,24 +3001,30 @@ function autoPostAffiliateAmazon() {
       const xResult = postToX(fullPost, 'sunakun');
       console.log('[autoPostAffiliateAmazon] X投稿結果:', JSON.stringify(xResult));
 
-      // Discord転送用（IFTTT/Webhook等）にプレーンなテキストだけを送信
+      // Discord転送（X成功/失敗どちらでも送信・手動投稿しやすい形式）
       try {
         let webhooks = {};
         try { webhooks = JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch {}
-        const amzWebhook = webhooks['amazon'] || webhooks['Amazon'] || webhooks['アマゾン'] || webhooks['KCS本部'] || '';
+        const amzWebhook = webhooks['amazon'] || webhooks['Amazon'] || webhooks['アマゾン'] || webhooks['affiliate'] || webhooks['KCS本部'] || '';
         if (amzWebhook) {
+          const xStatus = xResult.ok ? '✅ X自動投稿成功' : '❌ X自動投稿失敗 → **以下を手動でXに投稿してください**';
+          const discordMsg = xResult.ok
+            ? `📦 **[すなくん] Amazon自動投稿完了** ${xStatus}\n\n${fullPost}`
+            : `📦 **[すなくん] Amazon投稿キュー** ${xStatus}\n\n` +
+              `\`\`\`\n${fullPost}\n\`\`\`\n` +
+              `👆 上のテキストをコピーしてXに貼り付けてください\n` +
+              `⚠️ エラー詳細: ${JSON.stringify(xResult.error || 'CredentialsDepleted').slice(0, 100)}`;
           UrlFetchApp.fetch(amzWebhook, {
             method: 'post', contentType: 'application/json',
-            payload: JSON.stringify({ content: fullPost }),
+            payload: JSON.stringify({ content: discordMsg.slice(0, 2000) }),
             muteHttpExceptions: true
           });
-          console.log('[autoPostAffiliateAmazon] Discord(Amazon用)へ転送完了');
+          console.log('[autoPostAffiliateAmazon] Discord転送完了');
         }
       } catch (e) {
         console.error('[autoPostAffiliateAmazon] Discord転送エラー:', e.message);
       }
-      
-      // スプレッドシート「SNS投稿管理」およびログに記録
+
       logSnsPost('すなくん', 'X', fullPost, xResult.ok ? '投稿済み' : (xResult.skipped ? 'スキップ（API未設定）' : 'エラー'));
       return { ok: true, xResult };
     }
@@ -2563,16 +3043,18 @@ function autoPostAffiliateRakuten() {
     console.log('[autoPostAffiliateRakuten] トレンド追従型自動投稿を開始');
     const config = getKCSSettings();
     
-    // ガジェット系トレンドジャンル
-    const genres = [
-      { id: '100026', name: 'パソコン・周辺機器・お買い得PCパーツ' },
-      { id: '564500', name: '話題のスマホアクセサリー・便利ガジェット' },
-      { id: '211742', name: '生活を豊かにする最先端スマート家電' },
-      { id: '203874', name: '音質にこだわる人気のワイヤレスイヤホン・オーディオ機器' }
+    // 7曜日ローテーション（Amazon と時間帯をずらして重複回避）
+    const genresByDow = [
+      { id: '211742', name: 'スマート家電・生活便利グッズ' },           // 日
+      { id: '203874', name: 'ワイヤレスイヤホン・オーディオ機器' },     // 月
+      { id: '564500', name: '便利ガジェット・スマホアクセサリー' },     // 火
+      { id: '100026', name: 'パソコン・周辺機器・お買い得PCパーツ' },   // 水
+      { id: '211742', name: '健康グッズ・マッサージ機器・睡眠改善' },   // 木
+      { id: '203874', name: '美容家電・スキンケアグッズ' },             // 金
+      { id: '564500', name: 'キッチン家電・節約生活グッズ' },           // 土
     ];
-    // ランダムに今日のジャンルを選択
-    const selectedGenre = genres[Math.floor(Math.random() * genres.length)];
-    
+    const selectedGenre = genresByDow[new Date().getDay()];
+
     // AIに今日のジャンルに沿ったトレンドキーワード・テーマを決定させる
     const trendPrompt = `今日のガジェットトレンドテーマとして、「${selectedGenre.name}」に関連する、SNSやECサイトで今最も人気が高まっている具体的なキーワードやジャンルトレンドを1つ提案してください。出力は「〜の最新トレンド」や「〜の人気お買い得モデル」のような、Xに投稿する際の効果的なタイトル（日本語で25文字以内）のみとしてください。マークダウンや余計な説明文は一切含めないでください。`;
     const dynamicTheme = cmdAskGemini(trendPrompt, config, 'Affiliate') || `${selectedGenre.name}の人気アイテム`;
@@ -2595,24 +3077,29 @@ function autoPostAffiliateRakuten() {
       const xResult = postToX(fullPost, 'sunakun');
       console.log('[autoPostAffiliateRakuten] X投稿結果:', JSON.stringify(xResult));
 
-      // Discord転送用（IFTTT/Webhook等）にプレーンなテキストだけを送信
+      // Discord転送（X成功/失敗どちらでも送信・手動投稿しやすい形式）
       try {
         let webhooks = {};
         try { webhooks = JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch {}
-        const rakutenWebhook = webhooks['rakuten'] || webhooks['Rakuten'] || webhooks['楽天'] || webhooks['KCS本部'] || '';
-        if (rakutenWebhook) {
-          UrlFetchApp.fetch(rakutenWebhook, {
+        const rktWebhook = webhooks['rakuten'] || webhooks['Rakuten'] || webhooks['楽天'] || webhooks['affiliate'] || webhooks['KCS本部'] || '';
+        if (rktWebhook) {
+          const xStatus = xResult.ok ? '✅ X自動投稿成功' : '❌ X自動投稿失敗 → **以下を手動でXに投稿してください**';
+          const discordMsg = xResult.ok
+            ? `🛍 **[すなくん] 楽天自動投稿完了** ${xStatus}\n\n${fullPost}`
+            : `🛍 **[すなくん] 楽天投稿キュー** ${xStatus}\n\n` +
+              `\`\`\`\n${fullPost}\n\`\`\`\n` +
+              `👆 上のテキストをコピーしてXに貼り付けてください`;
+          UrlFetchApp.fetch(rktWebhook, {
             method: 'post', contentType: 'application/json',
-            payload: JSON.stringify({ content: fullPost }),
+            payload: JSON.stringify({ content: discordMsg.slice(0, 2000) }),
             muteHttpExceptions: true
           });
-          console.log('[autoPostAffiliateRakuten] Discord(楽天用)へ転送完了');
+          console.log('[autoPostAffiliateRakuten] Discord転送完了');
         }
       } catch (e) {
         console.error('[autoPostAffiliateRakuten] Discord転送エラー:', e.message);
       }
-      
-      // スプレッドシート「SNS投稿管理」およびログに記録
+
       logSnsPost('すなくん', 'X', fullPost, xResult.ok ? '投稿済み' : (xResult.skipped ? 'スキップ（API未設定）' : 'エラー'));
       return { ok: true, xResult };
     }
@@ -3127,82 +3614,69 @@ function getTwitterLength(text) {
 }
 
 // エックス（X / 旧Twitter）への投稿（直接投稿優先、無ければMake.com Webhook経由のハイブリッド）
-function postToX(text, account = 'sunakun') {
-  const config = getKCSSettings();
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// X投稿 — OAuth 2.0 ユーザーコンテキスト専用（Make.com不使用）
+// X無料プランで1,500ツイート/月対応
+// 認証URL: ?action=auth&account=sunakun または account=hal
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function postToX(text, account) {
   account = account || 'sunakun';
-
-  // 1. スプレッドシートに直接投稿用のX APIキーが揃っているか確認
-  let consumerKey, consumerSecret, accessToken, accessSecret;
-  if (account === 'hal') {
-    // ハルはスプレッドシートのB63〜B66（項目名：X_CONSUMER_KEY 等）を参照する
-    consumerKey    = config.X_CONSUMER_KEY;
-    consumerSecret = config.X_CONSUMER_SECRET;
-    accessToken    = config.X_ACCESS_TOKEN;
-    accessSecret   = config.X_ACCESS_SECRET;
-  } else {
-    // すなくん（デフォルト）はスプレッドシートのB9〜B12（項目名：HAL_X_... 等）を参照する
-    consumerKey    = config.HAL_X_CONSUMER_KEY;
-    consumerSecret = config.HAL_X_CONSUMER_SECRET;
-    accessToken    = config.HAL_X_ACCESS_TOKEN;
-    accessSecret   = config.HAL_X_ACCESS_SECRET;
-  }
-
-  let directResult;
-  if (consumerKey && consumerSecret && accessToken && accessSecret) {
-    console.log('[postToX] ' + account + ' として直接エックスへ新規投稿を実行します...');
-    directResult = postToXDirect(text, { consumerKey, consumerSecret, accessToken, accessSecret }, account);
-    if (directResult && directResult.ok) {
-      return directResult;
-    }
-    console.warn('[postToX] 直接投稿に失敗しました。Make.com Webhookにフォールバックします。詳細:', JSON.stringify(directResult));
-    // Fall through to Make.com webhook fallback below
-  }
-
-  // 2. キーが無い、または直接投稿が失敗した場合は Make.com Webhook 経由
-  const webhookUrl = config.MAKE_X_WEBHOOK_URL;
-  if (!webhookUrl) {
-    console.warn('[postToX] 投稿スキップ：エックスAPIキーおよび MAKE_X_WEBHOOK_URL の両方が未設定または失敗。本文:', text.slice(0, 50));
-    return { ok: false, skipped: true, reason: '連携用の設定が不足しています', directError: directResult || null };
-  }
+  const safeText = sliceTwitterText(text, 280);
+  const tweetUrl = 'https://api.twitter.com/2/tweets';
 
   try {
-    // OAuth 2.0トークンが利用可能な場合はMake.com HTTP モジュール({{1.authHeader}})用に付加する
-    var makeAuthHeader = null;
-    try {
-      var oauthService = getTwitterOAuthService(account);
-      if (oauthService && oauthService.hasAccess()) {
-        makeAuthHeader = 'Bearer ' + oauthService.getAccessToken();
-        console.log('[postToX] OAuth2トークンをMake.comペイロードに付加します account:', account);
-      }
-    } catch (authErr) {
-      console.warn('[postToX] OAuth2トークン取得失敗:', authErr.message);
+    const service = getTwitterOAuthService(account);
+
+    // 未認証の場合は認証URLを返す
+    if (!service.hasAccess()) {
+      const authUrl = service.getAuthorizationUrl();
+      console.warn('[postToX] OAuth2未認証 account:' + account + ' → ' + authUrl);
+      return {
+        ok: false,
+        needsAuth: true,
+        authUrl: authUrl,
+        message: 'OAuth2認証が必要です。authUrlにアクセスしてXにログインしてください。'
+      };
     }
 
-    const payload = {
-      account: account,
-      text: text
-    };
-    if (makeAuthHeader) payload.authHeader = makeAuthHeader;
-
-    const res = UrlFetchApp.fetch(webhookUrl, {
+    // OAuth 2.0 ベアラートークンで直接POST
+    const res = UrlFetchApp.fetch(tweetUrl, {
       method: 'post',
       contentType: 'application/json',
-      payload: JSON.stringify(payload),
+      headers: { 'Authorization': 'Bearer ' + service.getAccessToken() },
+      payload: JSON.stringify({ text: safeText }),
       muteHttpExceptions: true
     });
 
     const code = res.getResponseCode();
-    const bodyText = res.getContentText();
+    let body;
+    try { body = JSON.parse(res.getContentText()); } catch(e) { body = { raw: res.getContentText() }; }
 
-    if (code >= 200 && code < 300) {
-      console.log('[postToX] Make.com Webhook 送信成功');
-      return { ok: true, webhook_response: bodyText };
-    } else {
-      console.error('[postToX] Make.com Webhook 送信失敗:', bodyText);
-      return { ok: false, error: bodyText };
+    if (code === 200 || code === 201) {
+      const tweetId = body?.data?.id;
+      console.log('[postToX] OAuth2投稿成功 account:' + account + ' tweetId:', tweetId);
+      // 拡散エンジン: 15分後にセルフリプライ＋相互コメントを自動スケジュール
+      if (tweetId) scheduleSelfReply(tweetId, account);
+      return { ok: true, tweetId, account };
     }
+
+    // トークン期限切れの場合はリフレッシュして再試行
+    if (code === 401) {
+      console.warn('[postToX] OAuth2トークン期限切れ、リフレッシュ試行...');
+      service.reset();
+      return {
+        ok: false,
+        needsAuth: true,
+        authUrl: service.getAuthorizationUrl(),
+        message: 'トークンが期限切れです。再認証が必要です。'
+      };
+    }
+
+    console.error('[postToX] OAuth2失敗 code=' + code + ':', res.getContentText());
+    return { ok: false, error: body, code };
+
   } catch (e) {
-    console.error('[postToX] Make.com Webhook 送信例外:', e.message);
+    console.error('[postToX] 例外 account:' + account + ':', e.message);
     return { ok: false, error: e.message };
   }
 }
@@ -3222,7 +3696,7 @@ function getTwitterOAuthService(account) {
   }
   
   return OAuth2.createService('Twitter_' + account)
-    .setAuthorizationBaseUrl('https://twitter.com/i/oauth2/authorize')
+    .setAuthorizationBaseUrl('https://x.com/i/oauth2/authorize')
     .setTokenUrl('https://api.twitter.com/2/oauth2/token')
     .setClientId(clientId)
     .setClientSecret(clientSecret)
@@ -3620,6 +4094,182 @@ function setupDiscordTrigger() {
   try {
     SpreadsheetApp.getUi().alert('✅ Discord監視トリガーを設定しました（1分毎）。\n\n設定シートに DISCORD_CHANNEL_ID を入力してください。');
   } catch (e) {}
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Gmail 自動感知システム
+// 指定センダーからの重要メールを検知→Discord通知+自己修正
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const GMAIL_WATCH_SENDERS = [
+  'notifications@github.com',
+  'noreply@us2.make.com',
+  'onboarding@info.n8n.io',
+  'no-reply@marketing.base44.com',
+  'chelsea.c@ifttt.com',
+  'em@em1.cloudflare.com'
+];
+
+const GMAIL_KEYWORDS = {
+  error: ['failed', 'failure', 'error', 'エラー', '失敗', 'paused', '停止', 'credits', 'expired', 'trial'],
+  warning: ['warning', '警告', 'limit', '制限', 'deprecated', 'upgrade', 'アップグレード'],
+  info: ['success', '成功', 'completed', 'deployed', 'new feature', '新機能']
+};
+
+/**
+ * Gmail監視メイン関数（時間トリガーで実行）
+ * 直近1時間分のメールを解析してDiscordに通知
+ */
+function gmailMonitorTick() {
+  const config = getKCSSettings();
+  const props = PropertiesService.getUserProperties();
+  const lastCheck = Number(props.getProperty('GMAIL_LAST_CHECK') || '0');
+  const now = Date.now();
+  const since = new Date(lastCheck || now - 60 * 60 * 1000); // デフォルト1時間前
+
+  const findings = [];
+
+  for (const sender of GMAIL_WATCH_SENDERS) {
+    try {
+      const threads = GmailApp.search(`from:${sender} after:${Math.floor(since.getTime()/1000)}`, 0, 5);
+      for (const thread of threads) {
+        const msg = thread.getMessages()[0];
+        const subject = msg.getSubject() || '';
+        const snippet = msg.getPlainBody()?.substring(0, 300) || msg.getSubject() || '';
+        const date = msg.getDate();
+
+        // 重要度を判定
+        const combined = (subject + ' ' + snippet).toLowerCase();
+        let level = null;
+        if (GMAIL_KEYWORDS.error.some(k => combined.includes(k))) level = '🚨 エラー';
+        else if (GMAIL_KEYWORDS.warning.some(k => combined.includes(k))) level = '⚠️ 警告';
+        else if (GMAIL_KEYWORDS.info.some(k => combined.includes(k))) level = '✅ 完了';
+
+        if (level) {
+          findings.push({ level, sender, subject, snippet: snippet.substring(0, 200), date });
+        }
+      }
+    } catch (e) {
+      console.warn(`[Gmail Monitor] ${sender} 検索エラー:`, e.message);
+    }
+  }
+
+  props.setProperty('GMAIL_LAST_CHECK', String(now));
+
+  if (!findings.length) {
+    console.log('[Gmail Monitor] 新しい重要メールなし');
+    return { ok: true, found: 0 };
+  }
+
+  // Discordに通知
+  let webhookUrl = '';
+  try { webhookUrl = JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}')['error-log'] || config.KCS_HQ_WEBHOOK_URL || ''; }
+  catch(e) { webhookUrl = config.KCS_HQ_WEBHOOK_URL || ''; }
+
+  if (webhookUrl) {
+    for (const f of findings) {
+      const msg = `${f.level} **[Gmail感知]** \`${f.sender}\`\n**件名:** ${f.subject}\n${f.snippet}`;
+      try {
+        UrlFetchApp.fetch(webhookUrl, {
+          method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+          payload: JSON.stringify({ content: msg.substring(0, 2000) })
+        });
+      } catch(e) { console.warn('[Gmail Monitor] Discord通知失敗:', e.message); }
+    }
+  }
+
+  console.log(`[Gmail Monitor] ${findings.length}件の重要メールを検知・通知`);
+  return { ok: true, found: findings.length, findings };
+}
+
+/**
+ * Gmail監視の時間トリガーを設定（1時間毎）
+ */
+/**
+ * Discord Bot Token からサーバーのチャンネル一覧を取得し、
+ * DISCORD_CHANNEL_ID / KNOWLEDGE_CHANNEL_ID 等を自動設定
+ */
+function autoSetupDiscordChannels() {
+  const config = getKCSSettings();
+  const token = config.DISCORD_BOT_TOKEN || '';
+  if (!token) return { ok: false, error: 'DISCORD_BOT_TOKEN が未設定です' };
+
+  try {
+    // Bot が参加しているサーバー一覧を取得
+    const guildsRes = UrlFetchApp.fetch('https://discord.com/api/v10/users/@me/guilds', {
+      headers: { 'Authorization': 'Bot ' + token },
+      muteHttpExceptions: true
+    });
+    if (guildsRes.getResponseCode() !== 200) {
+      return { ok: false, error: 'Discord API エラー: ' + guildsRes.getResponseCode() + ' ' + guildsRes.getContentText().substring(0, 200) };
+    }
+    const guilds = JSON.parse(guildsRes.getContentText());
+    if (!guilds.length) return { ok: false, error: 'Botがどのサーバーにも参加していません' };
+
+    // 最初のサーバー（KCSサーバー）のチャンネル一覧
+    const guildId = guilds[0].id;
+    const chRes = UrlFetchApp.fetch('https://discord.com/api/v10/guilds/' + guildId + '/channels', {
+      headers: { 'Authorization': 'Bot ' + token },
+      muteHttpExceptions: true
+    });
+    if (chRes.getResponseCode() !== 200) {
+      return { ok: false, error: 'チャンネル取得エラー: ' + chRes.getResponseCode() };
+    }
+    const channels = JSON.parse(chRes.getContentText())
+      .filter(c => c.type === 0) // テキストチャンネルのみ
+      .map(c => ({ id: c.id, name: c.name }));
+
+    console.log('[autoSetupDiscord] チャンネル一覧:', JSON.stringify(channels));
+
+    // チャンネル名マッピング
+    const mapping = {};
+    for (const ch of channels) {
+      const n = ch.name.toLowerCase();
+      if (n.includes('kcs') && n.includes('本部') || n === 'kcs本部') mapping['KCS本部'] = ch.id;
+      if (n.includes('knowledge') || n.includes('ナレッジ')) mapping['knowledge'] = ch.id;
+      if (n.includes('hal') && n.includes('project') || n === 'hal-project') mapping['hal-project'] = ch.id;
+      if (n.includes('error') || n.includes('エラー')) mapping['error-log'] = ch.id;
+      if (n.includes('アフェ') || n.includes('affiliate') || n.includes('amazon')) mapping['affiliate'] = ch.id;
+    }
+
+    // メインチャンネルID設定
+    const mainChannelId = mapping['KCS本部'] || channels[0]?.id || '';
+    if (mainChannelId) {
+      saveSettingValue('DISCORD_CHANNEL_ID', mainChannelId);
+      saveSettingValue('DISCORD_HQ_CHANNEL_ID', mainChannelId);
+      console.log('[autoSetupDiscord] DISCORD_CHANNEL_ID = ' + mainChannelId);
+    }
+    if (mapping['knowledge']) {
+      saveSettingValue('KNOWLEDGE_CHANNEL_ID', mapping['knowledge']);
+    }
+
+    // DISCORD_CHANNELS JSONも保存
+    saveSettingValue('DISCORD_CHANNELS', JSON.stringify(mapping));
+
+    return {
+      ok: true,
+      guildName: guilds[0].name,
+      channels: channels,
+      mapped: mapping,
+      mainChannelId: mainChannelId
+    };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+function setupGmailMonitorTrigger() {
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'gmailMonitorTick')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+
+  ScriptApp.newTrigger('gmailMonitorTick')
+    .timeBased()
+    .everyHours(1)
+    .create();
+
+  console.log('✅ Gmail監視トリガーを1時間毎に設定しました。');
+  return { ok: true, message: 'Gmail監視トリガー設定完了（1時間毎）' };
 }
 
 /**
@@ -4578,6 +5228,165 @@ function autoReplyTick() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// X 拡散エンジン（エックス新アルゴ Grok 2026 準拠）
+// - 投稿後30分以内のセルフリプライ
+// - HAL⇔すなくん相互コメント
+// - リンク希望DM自動返信
+// - 1日3回以下の投稿制限
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/**
+ * 投稿後30分以内にセルフリプライ（エンゲージメント起動）
+ * postToX成功後に自動でスケジュールされる
+ * @param {string} tweetId 投稿したツイートID
+ * @param {string} account 'hal' | 'sunakun'
+ */
+function scheduleSelfReply(tweetId, account) {
+  if (!tweetId) return;
+  const props = PropertiesService.getScriptProperties();
+  const key = `SELF_REPLY_${tweetId}`;
+  props.setProperty(key, JSON.stringify({
+    tweetId, account, scheduledAt: new Date().toISOString(),
+    executeAfter: new Date(Date.now() + 15 * 60 * 1000).toISOString() // 15分後
+  }));
+  console.log(`[拡散エンジン] セルフリプライ予約: ${tweetId} (${account}) 15分後`);
+}
+
+/**
+ * セルフリプライ実行ティック（5分毎トリガー）
+ * 投稿後15〜25分でセルフリプライ＋相互コメントを実行
+ */
+function engagementTick() {
+  return withErrorHandling(() => {
+    const props = PropertiesService.getScriptProperties();
+    const allKeys = props.getKeys().filter(k => k.startsWith('SELF_REPLY_'));
+    const now = new Date();
+    let processed = 0;
+
+    for (const key of allKeys) {
+      try {
+        const data = JSON.parse(props.getProperty(key));
+        const executeAfter = new Date(data.executeAfter);
+        if (now < executeAfter) continue; // まだ早い
+
+        // 古すぎるデータ（2時間以上前）は削除
+        const scheduled = new Date(data.scheduledAt);
+        if (now - scheduled > 2 * 60 * 60 * 1000) {
+          props.deleteProperty(key);
+          continue;
+        }
+
+        const account = data.account;
+        const tweetId = data.tweetId;
+        const isHal = account === 'hal';
+
+        // 1. セルフリプライ（追加情報・質問投げかけ）
+        const selfReplyPrompt = isHal
+          ? '先ほどの自分の投稿に追加コメントを1つ書いてください。50文字以内。フォロワーに質問を投げかけて会話を促してください。例:「みんなは最近どんなコーデしてる？教えて〜！」口調はおっとり天然。'
+          : '先ほどの自分の投稿に追加コメントを1つ書いてください。50文字以内。フォロワーに質問を投げかけて会話を促してください。例:「みんなはどんなガジェット使ってる？教えて！」口調はカジュアル。';
+        const config = getKCSSettings();
+        let selfReply = callClaudeAPI(selfReplyPrompt, '', 'claude-haiku-4-5-20251001');
+        if (!selfReply) {
+          selfReply = cmdAskGemini(selfReplyPrompt, config, account);
+          selfReply = String(selfReply).replace(/🤖[^\n]*\n/, '').replace(/```[^`]*```/g, '').trim();
+        }
+        if (selfReply) {
+          const sr = replyToX(tweetId, selfReply.slice(0, 140), account);
+          console.log(`[拡散エンジン] セルフリプライ ${account}:`, sr.ok ? '成功' : sr.error);
+        }
+
+        // 2. 相互コメント（もう一方のアカウントからコメント）
+        const otherAccount = isHal ? 'sunakun' : 'hal';
+        const crossPrompt = isHal
+          ? `すなくんとして、HALの投稿に友達感覚でコメントしてください。40文字以内。ライバル意識を少し見せつつフレンドリーに。例:「また先越された…でもこのコーデはちょっと認めるわ🤔」`
+          : `HALとして、すなくんの投稿に友達感覚でコメントしてください。40文字以内。おっとりした口調で。例:「あ、これ気になってた！すなくんさすがだね〜」`;
+        let crossReply = callClaudeAPI(crossPrompt, '', 'claude-haiku-4-5-20251001');
+        if (!crossReply) {
+          crossReply = cmdAskGemini(crossPrompt, config, otherAccount);
+          crossReply = String(crossReply).replace(/🤖[^\n]*\n/, '').replace(/```[^`]*```/g, '').trim();
+        }
+        if (crossReply) {
+          const cr = replyToX(tweetId, crossReply.slice(0, 140), otherAccount);
+          console.log(`[拡散エンジン] 相互コメント ${otherAccount}→${account}:`, cr.ok ? '成功' : cr.error);
+        }
+
+        props.deleteProperty(key);
+        processed++;
+        Utilities.sleep(2000); // レート制限対策
+      } catch (e) {
+        console.error('[engagementTick] エラー:', e.message);
+        props.deleteProperty(key); // エラーでも削除して無限ループ防止
+      }
+    }
+
+    // 3. 「リンク希望」キーワードDM返信チェック
+    const dmCount = checkLinkRequestReplies();
+
+    return { ok: true, selfReplies: processed, dmResponses: dmCount };
+  }, 'engagementTick');
+}
+
+/**
+ * 「リンク希望」「リンクください」等のリプライを検知してリプ欄でリンク配布
+ */
+function checkLinkRequestReplies() {
+  const config = getKCSSettings();
+  const leadUrl = config.LEAD_MAGNET_URL || '';
+  const lineUrl = config.LINE_FUNNEL_URL || '';
+  if (!leadUrl && !lineUrl) return 0;
+
+  let count = 0;
+  for (const account of ['hal', 'sunakun']) {
+    try {
+      const mentions = getMentions(account);
+      for (const m of mentions) {
+        const text = (m.text || '').toLowerCase();
+        if (text.includes('リンク') || text.includes('ほしい') || text.includes('教えて') || text.includes('link')) {
+          const isHal = account === 'hal';
+          const replyMsg = isHal
+            ? `@${m.username} ありがとう〜！こちらからチェックしてみてね🧋\n${leadUrl || lineUrl}`
+            : `@${m.username} リンク送るね！ここからどうぞ👇\n${leadUrl || lineUrl}`;
+          const r = replyToX(m.id, replyMsg, account);
+          if (r.ok) count++;
+          Utilities.sleep(1000);
+        }
+      }
+    } catch (e) {
+      console.warn(`[checkLinkRequestReplies][${account}]`, e.message);
+    }
+  }
+  return count;
+}
+
+/**
+ * エンゲージメントエンジンのGASトリガーを設定（5分毎）
+ */
+function setupEngagementTrigger() {
+  // 既存トリガー削除
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'engagementTick')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+
+  ScriptApp.newTrigger('engagementTick')
+    .timeBased()
+    .everyMinutes(5)
+    .create();
+
+  // autoReplyTickも30分毎で設定（未設定なら）
+  const hasAutoReply = ScriptApp.getProjectTriggers()
+    .some(t => t.getHandlerFunction() === 'autoReplyTick');
+  if (!hasAutoReply) {
+    ScriptApp.newTrigger('autoReplyTick')
+      .timeBased()
+      .everyMinutes(30)
+      .create();
+  }
+
+  console.log('✅ 拡散エンジントリガー設定完了（engagementTick:5分毎, autoReplyTick:30分毎）');
+  return { ok: true, message: '拡散エンジントリガー設定完了' };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // TikTok スクリプト生成
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -5490,4 +6299,415 @@ function analyzeImageFromDiscord(imageUrl, config) {
   const json = JSON.parse(res.getContentText());
   const textResponse = json.candidates?.[0]?.content?.parts?.[0]?.text;
   return textResponse || 'テキストが生成されませんでした。';
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 💰 早期収益化エンジン（KCS Monetization Engine v1.0）
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/**
+ * 収益化ステータス一覧（セットアップチェックリスト + KPI）
+ */
+function getMonetizationStatus() {
+  return withErrorHandling(() => {
+    const config = getKCSSettings();
+
+    const checklist = [
+      { id: 'hal_x_key',     label: 'HAL X APIキー設定',        done: !!(config.HAL_X_CONSUMER_KEY && config.HAL_X_ACCESS_TOKEN), category: 'sns' },
+      { id: 'sunakun_x_key', label: 'すなくん X APIキー設定',    done: !!(config.X_CONSUMER_KEY && config.X_ACCESS_TOKEN),          category: 'sns' },
+      { id: 'rakuten_api',   label: '楽天アフィリエイトAPI設定', done: !!(config.RAKUTEN_APP_ID),                                    category: 'affiliate' },
+      { id: 'lead_magnet',   label: 'リードマグネットURL設定',   done: !!(config.LEAD_MAGNET_URL),                                   category: 'funnel' },
+      { id: 'line_funnel',   label: 'LINE誘導URL設定',          done: !!(config.LINE_FUNNEL_URL),                                   category: 'funnel' },
+      { id: 'mimomi_url',    label: 'MIMOMIショップURL設定',     done: !!(config.MIMOMIM_URL),                                       category: 'tieup' },
+      { id: 'youtube_id',    label: 'YouTubeチャンネルID設定',   done: !!(config.YOUTUBE_CHANNEL_ID),                                category: 'youtube' },
+      { id: 'discord_bot',   label: 'Discord Bot Token設定',    done: !!(config.DISCORD_BOT_TOKEN),                                 category: 'system' },
+      { id: 'claude_api',    label: 'Claude APIキー設定',       done: !!(config.CLAUDE_API_KEY),                                    category: 'system' },
+      { id: 'gemini_api',    label: 'Gemini APIキー設定',       done: !!(config.GEMINI_API_KEY),                                    category: 'system' },
+    ];
+
+    const doneCount = checklist.filter(c => c.done).length;
+    const readyPct  = Math.round((doneCount / checklist.length) * 100);
+
+    const affiliateData = getAffiliatePosts();
+    const affiliatePosts = affiliateData.posts || [];
+    const postedCount    = affiliatePosts.filter(p => p['ステータス'] === '投稿済み').length;
+    const salesCount     = affiliatePosts.filter(p => p['売上有無'] === 'あり').length;
+    const totalImpressions = affiliatePosts.reduce((s, p) => s + (Number(p['インプレッション']) || 0), 0);
+    const totalClicks      = affiliatePosts.reduce((s, p) => s + (Number(p['クリック数']) || 0), 0);
+
+    const noteData      = getNoteArticles();
+    const noteArticles  = noteData.articles || [];
+    const notePublished = noteArticles.filter(a => a['ステータス'] === '公開済み').length;
+    const noteDraft     = noteArticles.filter(a => a['ステータス'] === '下書き').length;
+
+    const triggers = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
+    const triggerStatus = {
+      affiliateAmazon:  triggers.includes('autoPostAffiliateAmazon'),
+      affiliateRakuten: triggers.includes('autoPostAffiliateRakuten'),
+      autoReply:        triggers.includes('autoReplyTick'),
+      engagement:       triggers.includes('engagementTick'),
+      morningBriefing:  triggers.includes('morningBriefing'),
+      revenueReport:    triggers.includes('generateRevenueReport'),
+    };
+
+    const streams = [
+      {
+        id: 'affiliate',
+        name: 'アフィリエイト（すなくん）',
+        icon: '📦',
+        status: (config.X_CONSUMER_KEY && config.X_ACCESS_TOKEN) ? 'active' : 'setup_needed',
+        monthlyTarget: 100000,
+        postedCount, salesCount,
+        impressions: totalImpressions, clicks: totalClicks,
+        ctr: totalImpressions > 0 ? ((totalClicks / totalImpressions) * 100).toFixed(2) : '0',
+        triggers: [
+          triggerStatus.affiliateAmazon  ? '✅ Amazon(12時)' : '❌ Amazon未設定',
+          triggerStatus.affiliateRakuten ? '✅ 楽天(18時)' : '❌ 楽天未設定',
+        ],
+      },
+      {
+        id: 'note', name: 'note コンテンツ販売', icon: '📝',
+        status: notePublished > 0 ? 'active' : 'not_started',
+        monthlyTarget: 30000,
+        publishedArticles: notePublished, draftArticles: noteDraft,
+        estimatedRevenue: notePublished * 300,
+      },
+      {
+        id: 'tieup', name: 'タイアップ（MIMOMI）', icon: '👗',
+        status: config.MIMOMIM_URL ? 'active' : 'setup_needed',
+        monthlyTarget: 500000,
+        note: 'タイアップ交渉・掃載数による',
+      },
+      {
+        id: 'youtube', name: 'YouTube広告収益', icon: '🎬',
+        status: config.YOUTUBE_CHANNEL_ID ? 'pending' : 'setup_needed',
+        monthlyTarget: 10000,
+        note: '登水1000人・再生4000時間到達後',
+      },
+    ];
+
+    return { ok: true, readyPct, doneCount, totalChecks: checklist.length, checklist, streams, triggerStatus, updatedAt: new Date().toISOString() };
+  }, 'getMonetizationStatus');
+}
+
+/**
+ * note.com 有料記事フル生成
+ */
+function generateNoteFullArticle(params) {
+  return withErrorHandling(() => {
+    const config   = getKCSSettings();
+    const topic    = params.topic    || 'おすすめアイテム';
+    const account  = params.account  || 'hal';
+    const priceYen = Number(params.priceYen || 300);
+    const keyword  = params.keyword  || '';
+    const isHal    = account === 'hal';
+
+    const charPersona = isHal
+      ? 'HAL（ハル）という台湾ハーフの21歳新人モデル。おっとり天然癌やし系。読者に寄り添う優しい一人称（わたし）の文体。服装・美容・日常について語る。'
+      : 'すなくんというガジェット好きキャラ。専門知識を分かりやすく伝えるカジュアルな文体。ガジェット・テック・節約について語る。';
+
+    const sysPrompt = 'あなたは' + charPersona + 'のnote.com有料記事ライターです。読者が「買ってよかった」と思える情報密度の高い記事を書いてください。';
+    const userPrompt = '以下のテーマでnote.com有料記事（全文）を執筆してください。\nテーマ: ' + topic + '\n' + (keyword ? 'SEOキーワード: ' + keyword + '\n' : '') + '価格: ' + priceYen + '円\n\n「# タイトル 」で始まり「## はじめに」「## 1.」「## 2.」「## 3.」「## まとめ」の構成で全期1500字以上。最後にXフォローを促すCTA必須。外部URLは本文に直貼り禁止。';
+
+    const article = callClaudeAPI(userPrompt, sysPrompt, 'claude-sonnet-4-6');
+    if (!article) return { ok: false, error: 'Claude API 応答なし' };
+
+    // note記事管理シートに保存
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let noteSheet = ss.getSheetByName('note記事管理');
+    if (!noteSheet) {
+      noteSheet = ss.insertSheet('note記事管理');
+      noteSheet.getRange(1, 1, 1, 8).setValues([['記事ID', 'アカウント', 'テーマ', 'タイトル', '本文', '価格(円)', 'ステータス', '作成日']]);
+      styleHeader(noteSheet, 8);
+      noteSheet.setColumnWidth(4, 200);
+      noteSheet.setColumnWidth(5, 500);
+    }
+
+    const articleId  = 'NOTE_' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmm') + '_' + account.toUpperCase();
+    const titleMatch = article.match(/^#\s+(.+)/m);
+    const title      = titleMatch ? titleMatch[1].trim() : topic;
+
+    noteSheet.appendRow([articleId, account, topic, title, article, priceYen, '下書き', new Date().toISOString()]);
+
+    // GitHubにバックアップ
+    const dateStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmm');
+    const path    = (isHal ? 'Projects/HAL' : 'Projects/Affiliate') + '/note_article_' + account + '_' + dateStr + '.md';
+    saveToGitHub(path, article, '[note] ' + topic + ' フル記事生成 (' + priceYen + '円)');
+
+    // Discord通知
+    const webhooks  = (() => { try { return JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch(e) { return {}; } })();
+    const webhook   = webhooks[isHal ? 'hal-project' : 'affiliate'] || webhooks['KCS本部'] || Object.values(webhooks)[0];
+    if (webhook) {
+      UrlFetchApp.fetch(webhook, {
+        method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        payload: JSON.stringify({
+          content: '📝 **note記事生成完了！** [' + account.toUpperCase() + ']\n**テーマ:** ' + topic + ' | **価格:** ' + priceYen + '円\n**ID:** `' + articleId + '`\n\n' + article.slice(0, 500),
+          username: isHal ? 'HAL - note記事ライター' : 'すなくん - note記事ライター'
+        })
+      });
+    }
+
+    return { ok: true, articleId, title, article, account, topic, priceYen };
+  }, 'generateNoteFullArticle');
+}
+
+/**
+ * note記事一覧取得
+ */
+function getNoteArticles() {
+  return withErrorHandling(() => {
+    const ss    = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('note記事管理');
+    if (!sheet || sheet.getLastRow() < 2) return { ok: true, articles: [] };
+    const rows    = sheet.getRange(2, 1, sheet.getLastRow() - 1, 8).getValues();
+    const headers = ['記事ID', 'アカウント', 'テーマ', 'タイトル', '本文', '価格(円)', 'ステータス', '作成日'];
+    const articles = rows.map(row => {
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = row[i]; });
+      return obj;
+    }).filter(a => a['記事ID']);
+    return { ok: true, articles };
+  }, 'getNoteArticles');
+}
+
+/**
+ * note記事ステータス更新
+ */
+function saveNoteArticle(params) {
+  return withErrorHandling(() => {
+    const ss    = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('note記事管理');
+    if (!sheet) return { ok: false, error: 'note記事管理シートが存在しません' };
+    const rows = sheet.getDataRange().getValues();
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i][0] === params.articleId) {
+        if (params.status)  sheet.getRange(i + 1, 7).setValue(params.status);
+        if (params.noteUrl) sheet.getRange(i + 1, 8).setValue(params.noteUrl);
+        return { ok: true, message: '記事情報を更新しました' };
+      }
+    }
+    return { ok: false, error: '記事IDが見つかりません' };
+  }, 'saveNoteArticle');
+}
+
+/**
+ * リードマグネット誘導ツイート投稿
+ */
+function postLeadMagnetTease(account) {
+  return withErrorHandling(() => {
+    const config  = getKCSSettings();
+    const isHal   = account === 'hal';
+    const leadUrl = config.LEAD_MAGNET_URL || '';
+    const lineUrl = config.LINE_FUNNEL_URL || '';
+
+    if (!leadUrl && !lineUrl) {
+      return { ok: false, error: 'LEAD_MAGNET_URL または LINE_FUNNEL_URL を設定シートに入力してください。' };
+    }
+
+    const sysPrompt = isHal
+      ? 'HAL（ハル）という新人モデル。おっとり天然癌やし系。フォロワーに無料プレゼントを告知するツイートを書いてください。'
+      : 'すなくんというガジェット好きキャラ。無料情報をプレゼントするツイートを書いてください。';
+    const userPrompt = isHal
+      ? '無料プレゼント告知ツイートを130字以内で書いて。「リンク希望」とリプライした人にお気に入りアイテムリストを送る。言葵はハル口調。文末にリプライ行動を促す文。ハッシュタグなし。'
+      : '無料情報プレゼント告知ツイートを130字以内で書いて。「リンク希望」とリプライした人に廢選ガジェット比較シートを送る。カジュアルな口調。文末にリプライ行動を促す文。ハッシュタグなし。';
+
+    let tweetText = callClaudeAPI(userPrompt, sysPrompt, 'claude-haiku-4-5-20251001');
+    if (!tweetText) {
+      tweetText = isHal
+        ? '🎁 このツイートに「リンク希望」ってリプライしてくれた方に、わたしが毎日使ってるお気に入りアイテムリストをお送りします🦳よかったら気軽にリプライしてね🦳'
+        : '🎁 このツイートに「リンク希望」ってリプライしてくれた方に、すなくん帳選ガジェット比較シート（2024年版）を無料でプレゼント！欲しい人はリプライどうぞ！';
+    }
+    tweetText = sliceTwitterText(tweetText, 140);
+
+    const keys = {
+      consumerKey:    isHal ? config.HAL_X_CONSUMER_KEY    : config.X_CONSUMER_KEY,
+      consumerSecret: isHal ? config.HAL_X_CONSUMER_SECRET : config.X_CONSUMER_SECRET,
+      accessToken:    isHal ? config.HAL_X_ACCESS_TOKEN    : config.X_ACCESS_TOKEN,
+      accessSecret:   isHal ? config.HAL_X_ACCESS_SECRET   : config.X_ACCESS_SECRET,
+    };
+    const xResult = postToXDirect(tweetText, keys, account);
+    if (xResult.ok && xResult.id) scheduleSelfReply(xResult.id, account);
+
+    const webhooks = (() => { try { return JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch(e) { return {}; } })();
+    const webhook  = webhooks[isHal ? 'hal-project' : 'affiliate'] || webhooks['KCS本部'] || Object.values(webhooks)[0];
+    if (webhook) {
+      UrlFetchApp.fetch(webhook, {
+        method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        payload: JSON.stringify({
+          content: '🎁 **リードマグネット誘導ツイートを投稿しました** [' + account.toUpperCase() + ']\n' + tweetText + '\n\n' + (xResult.ok ? '✅ X投稿成功' : '❌ X投稿失敗: ' + JSON.stringify(xResult.error)),
+          username: '💰 KCS 収益化エンジン'
+        })
+      });
+    }
+
+    logSnsPost(account, 'X-リードマグネット', tweetText, xResult.ok ? '投稿済み' : 'エラー');
+    return { ok: xResult.ok, tweetText, xResult };
+  }, 'postLeadMagnetTease');
+}
+
+/**
+ * 収益レポート生成（毎日21時 or 手動）
+ */
+function generateRevenueReport() {
+  return withErrorHandling(() => {
+    const config = getKCSSettings();
+    const now     = new Date();
+    const todayStr = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy-MM-dd');
+    const weekAgo  = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const affiliateData = getAffiliatePosts();
+    const posts = affiliateData.posts || [];
+    const todayPosts = posts.filter(p => (p['タイムスタンプ'] || '').startsWith(todayStr));
+    const weekPosts  = posts.filter(p => new Date(p['タイムスタンプ'] || 0) > weekAgo);
+    const weekSales  = weekPosts.filter(p => p['売上有無'] === 'あり').length;
+    const weekImps   = weekPosts.reduce((s, p) => s + (Number(p['インプレッション']) || 0), 0);
+    const weekClicks = weekPosts.reduce((s, p) => s + (Number(p['クリック数']) || 0), 0);
+
+    const noteData       = getNoteArticles();
+    const noteArticles   = noteData.articles || [];
+    const notePublished  = noteArticles.filter(a => a['ステータス'] === '公開済み').length;
+    const noteDraft      = noteArticles.filter(a => a['ステータス'] === '下書き').length;
+    const noteRevenue    = notePublished * 300;
+
+    const triggers = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
+
+    const report = {
+      date: todayStr,
+      affiliate: { todayPosts: todayPosts.length, weekPosts: weekPosts.length, weekSales, weekImpressions: weekImps, weekClicks, weekCTR: weekImps > 0 ? ((weekClicks / weekImps) * 100).toFixed(2) + '%' : '0%' },
+      note:      { published: notePublished, draft: noteDraft, estimatedRevenue: noteRevenue },
+      systemHealth: {
+        halXKeySet:     !!(config.HAL_X_CONSUMER_KEY && config.HAL_X_ACCESS_TOKEN),
+        sunakunXKeySet: !!(config.X_CONSUMER_KEY && config.X_ACCESS_TOKEN),
+        affiliateAmazonTrigger:  triggers.includes('autoPostAffiliateAmazon'),
+        affiliateRakutenTrigger: triggers.includes('autoPostAffiliateRakuten'),
+        autoReplyTrigger:        triggers.includes('autoReplyTick'),
+        engagementTrigger:       triggers.includes('engagementTick'),
+      },
+    };
+
+    const webhooks = (() => { try { return JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch(e) { return {}; } })();
+    const webhook  = webhooks['daily-report'] || webhooks['KCS本部'] || Object.values(webhooks)[0];
+    if (webhook) {
+      const h = report.systemHealth;
+      const msg =
+        '💰 **KCS 収益化デイリーレポート** ' + todayStr + '\n\n' +
+        '**📦 アフィリエイト**\n' +
+        '本日投稿: ' + report.affiliate.todayPosts + '件 | 7日間: ' + report.affiliate.weekPosts + '件 | 売上: ' + report.affiliate.weekSales + '件\n' +
+        'インプレ: ' + report.affiliate.weekImpressions.toLocaleString() + ' | クリック: ' + report.affiliate.weekClicks + ' | CTR: ' + report.affiliate.weekCTR + '\n\n' +
+        '**📝 note記事**\n' +
+        '公開済み: ' + report.note.published + '件 | 下書き: ' + report.note.draft + '件 | 準定収益: ¥' + report.note.estimatedRevenue.toLocaleString() + '\n\n' +
+        '**⚙️ システムヘルス**\n' +
+        'HAL X: ' + (h.halXKeySet ? '✅' : '❌未設定') + ' | すなくん X: ' + (h.sunakunXKeySet ? '✅' : '❌未設定') + '\n' +
+        'Amazon自動: ' + (h.affiliateAmazonTrigger ? '✅' : '❌') + ' | 楽天自動: ' + (h.affiliateRakutenTrigger ? '✅' : '❌') + ' | 自動返信: ' + (h.autoReplyTrigger ? '✅' : '❌');
+      UrlFetchApp.fetch(webhook, {
+        method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        payload: JSON.stringify({ content: msg, username: '💰 KCS 収益化エンジン' })
+      });
+    }
+
+    return { ok: true, report };
+  }, 'generateRevenueReport');
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🐦 GitHub Actions X投稿キュー管理
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/**
+ * ScriptPropertiesから最も古い未投稿キューを1件取得して返す
+ * GitHub Actions が定期的に呼び出してX投稿を実行する
+ * @param {string} account 'sunakun' | 'hal'
+ */
+function getNextQueuedPost(account) {
+  return withErrorHandling(() => {
+    const props = PropertiesService.getScriptProperties();
+    const prefix = account === 'hal' ? 'HAL_PENDING_' : 'SUNAKUN_PENDING_';
+    const allKeys = props.getKeys().filter(k => k.startsWith(prefix));
+
+    if (allKeys.length === 0) {
+      return { ok: true, hasPost: false, account };
+    }
+
+    // 最も古いキーを取得（作成日時順）
+    let oldest = null;
+    let oldestKey = null;
+    for (const key of allKeys) {
+      try {
+        const data = JSON.parse(props.getProperty(key));
+        if (!oldest || new Date(data.created || 0) < new Date(oldest.created || 0)) {
+          oldest = data;
+          oldestKey = key;
+        }
+      } catch (e) { props.deleteProperty(key); }
+    }
+
+    if (!oldest || !oldestKey) return { ok: true, hasPost: false, account };
+
+    // 取得したらキューから削除（二重投稿防止）
+    props.deleteProperty(oldestKey);
+
+    const postText = oldest.text || oldest.post || '';
+    const hashtags = oldest.hashtags || [];
+    const fullText = hashtags.length > 0 ? `${postText}\n\n${hashtags.join(' ')}` : postText;
+    const sliced  = sliceTwitterText(fullText, 280);
+
+    console.log(`[getNextQueuedPost] ${account} キュー取得: ${oldestKey} / ${sliced.length}文字`);
+
+    // 取得ログをDiscordに通知
+    const config  = getKCSSettings();
+    const webhooks = (() => { try { return JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch(e) { return {}; } })();
+    const webhook  = webhooks[account === 'hal' ? 'hal-project' : 'affiliate'] || webhooks['KCS本部'] || Object.values(webhooks)[0];
+    if (webhook) {
+      UrlFetchApp.fetch(webhook, {
+        method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        payload: JSON.stringify({
+          content: `🐦 **[${account.toUpperCase()}] GitHub Actions X投稿キュー取得**\n投稿文をGitHub Actionsに渡しました。X投稿を実行中...\n\n\`\`\`\n${sliced}\n\`\`\``,
+          username: '🤖 GitHub Actions X投稿エンジン'
+        })
+      });
+    }
+
+    return { ok: true, hasPost: true, account, text: sliced, postId: oldestKey };
+  }, 'getNextQueuedPost');
+}
+
+/**
+ * GitHub ActionsがX投稿完了後にGASに結果を報告するエンドポイント
+ */
+function reportXPostResult(params) {
+  return withErrorHandling(() => {
+    const account  = params.account || 'sunakun';
+    const tweetId  = params.tweetId || '';
+    const success  = params.success === true || params.success === 'true';
+    const postText = params.text   || '';
+    const error    = params.error  || '';
+
+    logSnsPost(account, 'X (GitHub Actions)', postText, success ? '投稿済み' : 'エラー: ' + error);
+
+    const config  = getKCSSettings();
+    const webhooks = (() => { try { return JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch(e) { return {}; } })();
+    const webhook  = webhooks[account === 'hal' ? 'hal-project' : 'affiliate'] || webhooks['KCS本部'] || Object.values(webhooks)[0];
+    if (webhook) {
+      const msg = success
+        ? `✅ **[${account.toUpperCase()}] X投稿成功！** (GitHub Actions)\nhttps://x.com/i/web/status/${tweetId}`
+        : `❌ **[${account.toUpperCase()}] X投稿失敗** (GitHub Actions)\nエラー: ${error}\n\n投稿文:\n\`\`\`\n${postText}\n\`\`\``;
+      UrlFetchApp.fetch(webhook, {
+        method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        payload: JSON.stringify({ content: msg, username: '🤖 GitHub Actions X投稿エンジン' })
+      });
+    }
+
+    return { ok: true, logged: true };
+  }, 'reportXPostResult');
+}
+
+/**
+ * 収益レポートの自動トリガーをセットアップ（毎日21時）
+ */
+function setupRevenueReportTrigger() {
+  const existing = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
+  if (!existing.includes('generateRevenueReport')) {
+    ScriptApp.newTrigger('generateRevenueReport').timeBased().atHour(21).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
+    console.log('[収益化] 収益レポートトリガー設定完了 (毎日21時)');
+  }
 }

@@ -20,6 +20,7 @@ import AffiliateView from './views/AffiliateView.jsx';
 import PipelineView from './views/PipelineView.jsx';
 import HALView from './views/HALView.jsx';
 import PromptsView from './views/PromptsView.jsx';
+import MonetizationView from './views/MonetizationView.jsx';
 
 // ============================================
 // セッション管理ヘルパー（プロジェクトコード別データ分離）
@@ -677,6 +678,7 @@ export default function App() {
             onOpenPipeline={(team) => { setPipelineTeam(team); setView('pipeline'); }}
             onOpenHAL={() => setView('hal')}
             onOpenPrompts={() => setView('prompts')}
+            onOpenMonetization={() => setView('monetization')}
             showToast={showToast}
             gasUrls={gasUrls}
           />
@@ -830,6 +832,14 @@ export default function App() {
             onBack={() => setView('home')}
             showToast={showToast}
             gasUrls={gasUrls}
+          />
+        )}
+        {view === 'monetization' && (
+          <MonetizationView
+            apiKeys={apiKeys}
+            gasUrl={gasUrls[0]}
+            showToast={showToast}
+            onBack={() => setView('home')}
           />
         )}
         {view === 'prompts' && (
