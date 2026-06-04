@@ -1,0 +1,137 @@
+name: X Auto Post
+
+on:
+  schedule:
+    # すなくん Amazon投稿（毎日 12:00 JST = 03:00 UTC）
+    - cron: '0 3 * * *'
+    # すなくん 楽天投稿（毎日 18:00 JST = 09:00 UTC）
+    - cron: '0 9 * * *'
+    # HAL 投稿（毎日 10:00 JST = 01:00 UTC）
+    - cron: '0 1 * * *'
+    # HAL 午後投稿（毎日 15:00 JST = 06:00 UTC）
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'アカウント (sunakun / hal)'
+        required: true
+        default: 'sunakun'
+        type: choice
+        options:
+          - sunakun
+          - hal
+
+jobs:
+  post-to-x:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install twitter-api-v2
+        run: npm install twitter-api-v2 node-fetch
+
+      # スケジュール時間でアカウントを自動判定
+      - name: Determine account
+        id: account
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ github.event.inputs.account }}" >> $GITHUB_OUTPUT
+          else
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" = "01" ] || [ "$HOUR" = "06" ]; then
+              echo "name=hal" >> $GITHUB_OUTPUT
+            else
+              echo "name=sunakun" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      # GAS からキューの投稿文を取得
+      - name: Fetch post from GAS queue
+        id: fetch
+        env:
+          GAS_URL: ${{ secrets.GAS_WEBHOOK_URL }}
+        run: |
+          ACCOUNT="${{ steps.account.outputs.name }}"
+          echo "アカウント: $ACCOUNT"
+          RESPONSE=$(curl -s --max-time 30 "${GAS_URL}?action=getNextQueuedPost&account=${ACCOUNT}")
+          echo "GAS response: $RESPONSE"
+          HAS_POST=$(echo "$RESPONSE" | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);process.stdout.write(String(j.hasPost||false))}catch(e){process.stdout.write('false')}})")
+          echo "has_post=$HAS_POST" >> $GITHUB_OUTPUT
+          if [ "$HAS_POST" = "true" ]; then
+            TEXT=$(echo "$RESPONSE" | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);process.stdout.write(j.text||'')}catch(e){process.stdout.write('')}})")
+            # 改行をエスケープしてGITHUB_OUTPUTに保存
+            echo "text<<EOF" >> $GITHUB_OUTPUT
+            echo "$TEXT" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      # キューが空の場合はGASに投稿生成をリクエスト
+      - name: Request GAS to generate post if queue empty
+        id: generate
+        if: steps.fetch.outputs.has_post != 'true'
+        env:
+          GAS_URL: ${{ secrets.GAS_WEBHOOK_URL }}
+        run: |
+          ACCOUNT="${{ steps.account.outputs.name }}"
+          echo "キューが空のため投稿文を生成リクエスト中..."
+          if [ "$ACCOUNT" = "sunakun" ]; then
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" = "03" ]; then
+              ACTION="auto_post_affiliate_amazon"
+            else
+              ACTION="auto_post_affiliate_rakuten"
+            fi
+          else
+            ACTION="generate_hal_post"
+          fi
+          RESPONSE=$(curl -s --max-time 60 -X POST "${GAS_URL}" \
+            -H "Content-Type: application/json" \
+            -d "{\"action\":\"${ACTION}\"}")
+          echo "生成結果: $RESPONSE"
+          # 生成後にキューを再取得
+          sleep 5
+          RESPONSE2=$(curl -s --max-time 30 "${GAS_URL}?action=getNextQueuedPost&account=${ACCOUNT}")
+          HAS_POST=$(echo "$RESPONSE2" | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);process.stdout.write(String(j.hasPost||false))}catch(e){process.stdout.write('false')}})")
+          echo "has_post=$HAS_POST" >> $GITHUB_OUTPUT
+          if [ "$HAS_POST" = "true" ]; then
+            TEXT=$(echo "$RESPONSE2" | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);process.stdout.write(j.text||'')}catch(e){process.stdout.write('')}})")
+            echo "text<<EOF" >> $GITHUB_OUTPUT
+            echo "$TEXT" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      # X に投稿（twitter-api-v2 使用）
+      - name: Post to X
+        id: post
+        if: steps.fetch.outputs.has_post == 'true' || steps.generate.outputs.has_post == 'true'
+        env:
+          # すなくん用
+          X_CONSUMER_KEY: ${{ secrets.X_CONSUMER_KEY }}
+          X_CONSUMER_SECRET: ${{ secrets.X_CONSUMER_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+          # HAL用
+          HAL_X_CONSUMER_KEY: ${{ secrets.HAL_X_CONSUMER_KEY }}
+          HAL_X_CONSUMER_SECRET: ${{ secrets.HAL_X_CONSUMER_SECRET }}
+          HAL_X_ACCESS_TOKEN: ${{ secrets.HAL_X_ACCESS_TOKEN }}
+          HAL_X_ACCESS_SECRET: ${{ secrets.HAL_X_ACCESS_SECRET }}
+          X_ACCOUNT: ${{ steps.account.outputs.name }}
+          TWEET_TEXT: ${{ steps.fetch.outputs.has_post == 'true' && steps.fetch.outputs.text || steps.generate.outputs.text }}
+        run: node scripts/x_post.mjs
+
+      # 結果をGASに報告（Discord通知）
+      - name: Report result to GAS
+        if: always() && (steps.fetch.outputs.has_post == 'true' || steps.generate.outputs.has_post == 'true')
+        env:
+          GAS_URL: ${{ secrets.GAS_WEBHOOK_URL }}
+        run: |
+          ACCOUNT="${{ steps.account.outputs.name }}"
+          SUCCESS="${{ steps.post.outcome == 'success' }}"
+          TWEET_ID="${{ steps.post.outputs.tweet_id || '' }}"
+          curl -s -X POST "${GAS_URL}" \
+            -H "Content-Type: application/json" \
+            -d "{\"action\":\"report_x_post_result\",\"account\":\"${ACCOUNT}\",\"success\":${SUCCESS},\"tweetId\":\"${TWEET_ID}\"}"
