@@ -94,26 +94,34 @@ jobs:
             let d='';
             process.stdin.on('data',c=>d+=c);
             process.stdin.on('end',()=>{
-              try {
-                const j=JSON.parse(d);
-                // 各アクションのレスポンス形式に対応
-                let text = '';
-                if (j.xResult && j.xResult.text) {
-                  text = j.xResult.text;
-                } else if (j.post && j.post.post) {
-                  // generateSunakkunPost 形式
-                  const p = j.post;
-                  text = p.post + (p.hashtags && p.hashtags.length > 0 ? '\n\n' + p.hashtags.join(' ') : '');
-                } else if (j.patterns && j.patterns.pattern1) {
-                  // generateHALPost 形式
-                  const pat = j.patterns;
-                  text = pat.pattern1 + (pat.hashtags && pat.hashtags.length > 0 ? '\n\n' + pat.hashtags.join(' ') : '');
-                } else if (j.result && j.result.post && j.result.post.post) {
-                  // autoPostAffiliate 形式
-                  const rp = j.result.post;
-                  text = rp.post + (rp.hashtags && rp.hashtags.length > 0 ? '\n\n' + rp.hashtags.join(' ') : '');
+              function extractText(obj) {
+                if (!obj) return '';
+                // 二重JSON対応: post が JSON文字列の場合は再パース
+                function resolvePost(raw) {
+                  if (!raw) return '';
+                  const s = String(raw).trim();
+                  if (s.startsWith('{')) {
+                    try { const inner = JSON.parse(s); return inner.post || s; } catch(e) {}
+                  }
+                  return s;
                 }
-                process.stdout.write(text || '');
+                let text = '';
+                let hashtags = [];
+                if (obj.post && obj.post.post !== undefined) {
+                  // generateSunakkunPost 形式: {ok,post:{post,hashtags},postId}
+                  text = resolvePost(obj.post.post);
+                  hashtags = obj.post.hashtags || [];
+                } else if (obj.patterns && obj.patterns.pattern1) {
+                  // generateHALPost 形式: {ok,patterns:{pattern1,...,hashtags},postId}
+                  text = resolvePost(obj.patterns.pattern1);
+                  hashtags = obj.patterns.hashtags || [];
+                }
+                if (hashtags.length > 0) text += '\n\n' + hashtags.join(' ');
+                return text;
+              }
+              try {
+                const j = JSON.parse(d);
+                process.stdout.write(extractText(j) || '');
               } catch(e) {
                 process.stdout.write('');
               }
