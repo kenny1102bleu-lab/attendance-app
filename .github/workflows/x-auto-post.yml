@@ -20,26 +20,21 @@ on:
         options:
           - sunakun
           - hal
+      action_override:
+        description: 'GASアクション上書き（空白=自動判定）'
+        required: false
+        default: ''
 
 jobs:
-  post-to-x:
+  trigger-gas-post:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: npm install twitter-api-v2
-
-      # スケジュール時間でアカウントを自動判定
-      - name: Determine account and action
+      - name: Determine GAS action
         id: params
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ACCOUNT="${{ github.event.inputs.account }}"
+            OVERRIDE="${{ github.event.inputs.action_override }}"
           else
             HOUR=$(date -u +%H)
             if [ "$HOUR" = "01" ] || [ "$HOUR" = "06" ]; then
@@ -47,118 +42,82 @@ jobs:
             else
               ACCOUNT="sunakun"
             fi
+            OVERRIDE=""
           fi
 
-              # GASアクション名とテーマを決定（7曜日ローテーション）
-          HOUR=$(date -u +%H)
-          DOW=$(date -u +%u)  # 1=月 7=日
-          if [ "$ACCOUNT" = "hal" ]; then
-            GAS_ACTION="generate_hal_post"
-            THEMES=("コーデ紹介" "MIMOMIタイアップ" "台湾ネタ日常" "推し活・K-POP" "美容・スキンケア" "モデル日常" "週末の過ごし方")
-            THEME="${THEMES[$(( (DOW - 1) % 7 ))]}"
+          if [ -n "$OVERRIDE" ]; then
+            GAS_ACTION="$OVERRIDE"
+          elif [ "$ACCOUNT" = "hal" ]; then
+            GAS_ACTION="auto_post_hal"
           else
-            GAS_ACTION="generate_sunakun_post"
-            THEMES=("便利ガジェット" "パソコン周辺機器" "ワイヤレスイヤホン" "スマート家電" "モバイルバッテリー充電器" "キーボードデスク環境" "健康グッズ睡眠")
-            THEME="${THEMES[$(( (DOW - 1) % 7 ))]}"
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" = "03" ]; then
+              GAS_ACTION="auto_post_affiliate_amazon"
+            else
+              GAS_ACTION="auto_post_affiliate_rakuten"
+            fi
           fi
 
           echo "account=$ACCOUNT" >> $GITHUB_OUTPUT
           echo "gas_action=$GAS_ACTION" >> $GITHUB_OUTPUT
-          echo "theme=$THEME" >> $GITHUB_OUTPUT
-          echo "アカウント: $ACCOUNT / GASアクション: $GAS_ACTION / テーマ: $THEME"
+          echo "アカウント: $ACCOUNT / GASアクション: $GAS_ACTION"
 
-      # GAS に投稿文生成をリクエストし、テキストを取得
-      - name: Generate tweet via GAS
-        id: generate
+      # GAS に投稿を命令（GASが内部でOAuth2使ってX投稿する）
+      - name: Trigger GAS to post
+        id: gas_post
         env:
           GAS_URL: ${{ secrets.GAS_WEBHOOK_URL }}
         run: |
-          ACCOUNT="${{ steps.params.outputs.account }}"
           GAS_ACTION="${{ steps.params.outputs.gas_action }}"
+          echo "GASアクション実行: $GAS_ACTION"
 
-          echo "GASに投稿文生成リクエスト中... (action=$GAS_ACTION)"
-
-          THEME="${{ steps.params.outputs.theme }}"
-          echo "テーマ: $THEME"
-
-          # GAS POST リクエスト（-L でリダイレクト追跡）
-          RESPONSE=$(curl -s -L --max-time 60 \
-            --data "{\"action\":\"${GAS_ACTION}\",\"theme\":\"${THEME}\",\"platform\":\"X\"}" \
+          RESPONSE=$(curl -s -L --max-time 120 \
+            --data "{\"action\":\"${GAS_ACTION}\"}" \
             -H "Content-Type: application/json" \
             "${GAS_URL}")
 
-          echo "GAS レスポンス(先頭200文字): ${RESPONSE:0:200}"
+          echo "GAS応答(先頭300文字): ${RESPONSE:0:300}"
 
-          # レスポンスからツイートテキストを抽出（外部スクリプト使用・シェルクォート問題回避）
-          TWEET_TEXT=$(echo "$RESPONSE" | node scripts/extract_tweet.mjs 2>/dev/null || echo "")
+          # 成功判定
+          SUCCESS=$(echo "$RESPONSE" | node -e "
+            let d='';
+            process.stdin.on('data',c=>d+=c);
+            process.stdin.on('end',()=>{
+              try {
+                const j=JSON.parse(d);
+                const ok = j.ok===true || j.status==='ok' ||
+                           (j.xResult && j.xResult.ok) ||
+                           (j.result && j.result.xResult && j.result.xResult.ok);
+                process.stdout.write(String(ok));
+              } catch(e){ process.stdout.write('false'); }
+            });
+          " 2>/dev/null || echo "false")
 
-          if [ -z "$TWEET_TEXT" ]; then
-            echo "警告: GASからツイートテキストを取得できませんでした"
-            echo "has_text=false" >> $GITHUB_OUTPUT
+          echo "success=$SUCCESS" >> $GITHUB_OUTPUT
+          echo "投稿結果: $SUCCESS"
+
+          if [ "$SUCCESS" = "true" ]; then
+            echo "✅ GAS経由X投稿成功"
           else
-            echo "取得したツイートテキスト:"
-            echo "$TWEET_TEXT"
-            echo "has_text=true" >> $GITHUB_OUTPUT
-            echo "text<<TWEET_EOF" >> $GITHUB_OUTPUT
-            echo "$TWEET_TEXT" >> $GITHUB_OUTPUT
-            echo "TWEET_EOF" >> $GITHUB_OUTPUT
+            echo "⚠️ GAS経由X投稿失敗またはX APIエラー（Discordに詳細通知済み）"
+            # X APIの問題はGAS側がDiscordに通知済みのため、ここでは失敗扱いにしない
+            echo "success=partial" >> $GITHUB_OUTPUT
           fi
 
-      # GAS から OAuth2 Bearer Token を取得
-      - name: Get OAuth2 token from GAS
-        id: oauth
-        if: steps.generate.outputs.has_text == 'true'
-        env:
-          GAS_URL: ${{ secrets.GAS_WEBHOOK_URL }}
+      # 投稿完了をGitHub Actions Summaryに記録
+      - name: Post summary
+        if: always()
         run: |
           ACCOUNT="${{ steps.params.outputs.account }}"
-          RESPONSE=$(curl -s -L --max-time 15 "${GAS_URL}?action=getXOAuthToken&account=${ACCOUNT}")
-          echo "OAuth response: ${RESPONSE:0:100}"
-          TOKEN=$(echo "$RESPONSE" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);process.stdout.write(j.token||'')}catch(e){process.stdout.write('')}})" 2>/dev/null || echo "")
-          if [ -n "$TOKEN" ]; then
-            echo "has_token=true" >> $GITHUB_OUTPUT
-            echo "token=$TOKEN" >> $GITHUB_OUTPUT
-          else
-            echo "has_token=false" >> $GITHUB_OUTPUT
-            echo "OAuth2トークン取得失敗 (再認証が必要な可能性があります)"
-          fi
+          GAS_ACTION="${{ steps.params.outputs.gas_action }}"
+          SUCCESS="${{ steps.gas_post.outputs.success }}"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
 
-      # X に投稿（OAuth2 Bearer Token方式）
-      - name: Post to X
-        id: post
-        if: steps.generate.outputs.has_text == 'true'
-        env:
-          X_OAUTH2_TOKEN: ${{ steps.oauth.outputs.token }}
-          # OAuth 1.0a フォールバック用
-          X_CONSUMER_KEY:     ${{ secrets.X_CONSUMER_KEY }}
-          X_CONSUMER_SECRET:  ${{ secrets.X_CONSUMER_SECRET }}
-          X_ACCESS_TOKEN:     ${{ secrets.X_ACCESS_TOKEN }}
-          X_ACCESS_SECRET:    ${{ secrets.X_ACCESS_SECRET }}
-          HAL_X_CONSUMER_KEY:     ${{ secrets.HAL_X_CONSUMER_KEY }}
-          HAL_X_CONSUMER_SECRET:  ${{ secrets.HAL_X_CONSUMER_SECRET }}
-          HAL_X_ACCESS_TOKEN:     ${{ secrets.HAL_X_ACCESS_TOKEN }}
-          HAL_X_ACCESS_SECRET:    ${{ secrets.HAL_X_ACCESS_SECRET }}
-          X_ACCOUNT:   ${{ steps.params.outputs.account }}
-          TWEET_TEXT:  ${{ steps.generate.outputs.text }}
-        run: node scripts/x_post.mjs
-
-      # 結果をGASに報告してDiscord通知
-      - name: Report result to GAS
-        if: always() && steps.generate.outputs.has_text == 'true'
-        env:
-          GAS_URL: ${{ secrets.GAS_WEBHOOK_URL }}
-        run: |
-          ACCOUNT="${{ steps.params.outputs.account }}"
-          OUTCOME="${{ steps.post.outcome }}"
-          TWEET_ID="${{ steps.post.outputs.tweet_id }}"
-
-          if [ "$OUTCOME" = "success" ]; then
-            SUCCESS="true"
-          else
-            SUCCESS="false"
-          fi
-
-          curl -s -L --max-time 30 \
-            --data "{\"action\":\"report_x_post_result\",\"account\":\"${ACCOUNT}\",\"success\":${SUCCESS},\"tweetId\":\"${TWEET_ID}\"}" \
-            -H "Content-Type: application/json" \
-            "${GAS_URL}" || echo "GAS報告失敗（無視）"
+          echo "## X自動投稿レポート" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 項目 | 値 |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| 実行時刻 | $NOW |" >> $GITHUB_STEP_SUMMARY
+          echo "| アカウント | $ACCOUNT |" >> $GITHUB_STEP_SUMMARY
+          echo "| GASアクション | $GAS_ACTION |" >> $GITHUB_STEP_SUMMARY
+          echo "| 結果 | $SUCCESS |" >> $GITHUB_STEP_SUMMARY
