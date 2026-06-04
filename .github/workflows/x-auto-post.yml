@@ -89,50 +89,8 @@ jobs:
 
           echo "GAS レスポンス(先頭200文字): ${RESPONSE:0:200}"
 
-          # レスポンスからツイートテキストを抽出（Node.jsで解析）
-          TWEET_TEXT=$(echo "$RESPONSE" | node -e "
-            let d='';
-            process.stdin.on('data',c=>d+=c);
-            process.stdin.on('end',()=>{
-              // あらゆるJSONネスト・二重エンコードに対応してテキストを抽出
-              function deepExtract(val) {
-                if (!val) return '';
-                const s = String(val).trim();
-                // JSONオブジェクト文字列の場合は再パースを試みる
-                if (s.startsWith('{')) {
-                  try {
-                    const inner = JSON.parse(s);
-                    if (inner.post) return deepExtract(inner.post);
-                    if (inner.pattern1) return deepExtract(inner.pattern1);
-                  } catch(e) {
-                    // パース失敗時は正規表現で \"post\": \"value\" を抽出
-                    const m = s.match(/\"post\"\s*:\s*\"((?:[^\"\\\\]|\\\\.)*)\"/) ||
-                              s.match(/'post'\s*:\s*'([^']*)'/) ;
-                    if (m) return m[1].replace(/\\n/g,'\n').replace(/\\t/g,'\t').replace(/\\\"/g,'"');
-                  }
-                }
-                return s;
-              }
-              try {
-                const j = JSON.parse(d);
-                let text = '';
-                let hashtags = [];
-                if (j.post && j.post.post !== undefined) {
-                  // generateSunakkunPost 形式
-                  text = deepExtract(j.post.post);
-                  hashtags = Array.isArray(j.post.hashtags) ? j.post.hashtags : [];
-                } else if (j.patterns && j.patterns.pattern1) {
-                  // generateHALPost 形式
-                  text = deepExtract(j.patterns.pattern1);
-                  hashtags = Array.isArray(j.patterns.hashtags) ? j.patterns.hashtags : [];
-                }
-                if (hashtags.length > 0 && text) text += '\n\n' + hashtags.join(' ');
-                process.stdout.write(text || '');
-              } catch(e) {
-                process.stdout.write('');
-              }
-            });
-          " 2>/dev/null || echo "")
+          # レスポンスからツイートテキストを抽出（外部スクリプト使用・シェルクォート問題回避）
+          TWEET_TEXT=$(echo "$RESPONSE" | node scripts/extract_tweet.mjs 2>/dev/null || echo "")
 
           if [ -z "$TWEET_TEXT" ]; then
             echo "警告: GASからツイートテキストを取得できませんでした"
