@@ -49,19 +49,23 @@ jobs:
             fi
           fi
 
-          # GASアクション名を決定
+              # GASアクション名とテーマを決定（7曜日ローテーション）
           HOUR=$(date -u +%H)
+          DOW=$(date -u +%u)  # 1=月 7=日
           if [ "$ACCOUNT" = "hal" ]; then
             GAS_ACTION="generate_hal_post"
-          elif [ "$HOUR" = "03" ]; then
-            GAS_ACTION="auto_post_affiliate_amazon"
+            THEMES=("コーデ紹介" "MIMOMIタイアップ" "台湾ネタ日常" "推し活・K-POP" "美容・スキンケア" "モデル日常" "週末の過ごし方")
+            THEME="${THEMES[$(( (DOW - 1) % 7 ))]}"
           else
-            GAS_ACTION="auto_post_affiliate_rakuten"
+            GAS_ACTION="generate_sunakun_post"
+            THEMES=("便利ガジェット" "パソコン周辺機器" "ワイヤレスイヤホン" "スマート家電" "モバイルバッテリー充電器" "キーボードデスク環境" "健康グッズ睡眠")
+            THEME="${THEMES[$(( (DOW - 1) % 7 ))]}"
           fi
 
           echo "account=$ACCOUNT" >> $GITHUB_OUTPUT
           echo "gas_action=$GAS_ACTION" >> $GITHUB_OUTPUT
-          echo "アカウント: $ACCOUNT / GASアクション: $GAS_ACTION"
+          echo "theme=$THEME" >> $GITHUB_OUTPUT
+          echo "アカウント: $ACCOUNT / GASアクション: $GAS_ACTION / テーマ: $THEME"
 
       # GAS に投稿文生成をリクエストし、テキストを取得
       - name: Generate tweet via GAS
@@ -74,9 +78,12 @@ jobs:
 
           echo "GASに投稿文生成リクエスト中... (action=$GAS_ACTION)"
 
+          THEME="${{ steps.params.outputs.theme }}"
+          echo "テーマ: $THEME"
+
           # GAS POST リクエスト（-L でリダイレクト追跡）
           RESPONSE=$(curl -s -L --max-time 60 \
-            --data "{\"action\":\"${GAS_ACTION}\"}" \
+            --data "{\"action\":\"${GAS_ACTION}\",\"theme\":\"${THEME}\",\"platform\":\"X\"}" \
             -H "Content-Type: application/json" \
             "${GAS_URL}")
 
