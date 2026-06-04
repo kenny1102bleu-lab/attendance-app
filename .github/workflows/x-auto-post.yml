@@ -104,11 +104,32 @@ jobs:
             echo "TWEET_EOF" >> $GITHUB_OUTPUT
           fi
 
-      # X に投稿
+      # GAS から OAuth2 Bearer Token を取得
+      - name: Get OAuth2 token from GAS
+        id: oauth
+        if: steps.generate.outputs.has_text == 'true'
+        env:
+          GAS_URL: ${{ secrets.GAS_WEBHOOK_URL }}
+        run: |
+          ACCOUNT="${{ steps.params.outputs.account }}"
+          RESPONSE=$(curl -s -L --max-time 15 "${GAS_URL}?action=getXOAuthToken&account=${ACCOUNT}")
+          echo "OAuth response: ${RESPONSE:0:100}"
+          TOKEN=$(echo "$RESPONSE" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);process.stdout.write(j.token||'')}catch(e){process.stdout.write('')}})" 2>/dev/null || echo "")
+          if [ -n "$TOKEN" ]; then
+            echo "has_token=true" >> $GITHUB_OUTPUT
+            echo "token=$TOKEN" >> $GITHUB_OUTPUT
+          else
+            echo "has_token=false" >> $GITHUB_OUTPUT
+            echo "OAuth2トークン取得失敗 (再認証が必要な可能性があります)"
+          fi
+
+      # X に投稿（OAuth2 Bearer Token方式）
       - name: Post to X
         id: post
         if: steps.generate.outputs.has_text == 'true'
         env:
+          X_OAUTH2_TOKEN: ${{ steps.oauth.outputs.token }}
+          # OAuth 1.0a フォールバック用
           X_CONSUMER_KEY:     ${{ secrets.X_CONSUMER_KEY }}
           X_CONSUMER_SECRET:  ${{ secrets.X_CONSUMER_SECRET }}
           X_ACCESS_TOKEN:     ${{ secrets.X_ACCESS_TOKEN }}
