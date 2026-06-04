@@ -44,15 +44,11 @@ jobs:
             fi
           fi
 
+          # GASには投稿文生成のみ依頼（X投稿はGitHub Actions側で行う）
           if [ "$ACCOUNT" = "hal" ]; then
-            GAS_ACTION="auto_post_hal"
+            GAS_ACTION="generate_hal_post"
           else
-            HOUR=$(date -u +%H)
-            if [ "$HOUR" = "03" ]; then
-              GAS_ACTION="auto_post_affiliate_amazon"
-            else
-              GAS_ACTION="auto_post_affiliate_rakuten"
-            fi
+            GAS_ACTION="generate_sunakun_post"
           fi
 
           echo "account=$ACCOUNT" >> $GITHUB_OUTPUT
