@@ -90,10 +90,22 @@ jobs:
         id: post
         if: steps.generate.outputs.has_text == 'true'
         env:
+          # OAuth 1.0a キー（方式1: 優先）
+          X_CONSUMER_KEY: ${{ secrets.X_CONSUMER_KEY }}
+          X_CONSUMER_SECRET: ${{ secrets.X_CONSUMER_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+          HAL_X_CONSUMER_KEY: ${{ secrets.HAL_X_CONSUMER_KEY }}
+          HAL_X_CONSUMER_SECRET: ${{ secrets.HAL_X_CONSUMER_SECRET }}
+          HAL_X_ACCESS_TOKEN: ${{ secrets.HAL_X_ACCESS_TOKEN }}
+          HAL_X_ACCESS_SECRET: ${{ secrets.HAL_X_ACCESS_SECRET }}
+          # パスワード認証（方式2: フォールバック）
           SUNAKUN_X_USERNAME: ${{ secrets.SUNAKUN_X_USERNAME }}
           SUNAKUN_X_PASSWORD: ${{ secrets.SUNAKUN_X_PASSWORD }}
+          SUNAKUN_X_EMAIL: ${{ secrets.SUNAKUN_X_EMAIL }}
           HAL_X_USERNAME: ${{ secrets.HAL_X_USERNAME }}
           HAL_X_PASSWORD: ${{ secrets.HAL_X_PASSWORD }}
+          HAL_X_EMAIL: ${{ secrets.HAL_X_EMAIL }}
           X_ACCOUNT: ${{ steps.params.outputs.account }}
           TWEET_TEXT: ${{ steps.generate.outputs.text }}
         run: node scripts/x_post.mjs

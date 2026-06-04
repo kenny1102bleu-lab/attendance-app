@@ -1,19 +1,14 @@
 /**
  * KCS X自動投稿スクリプト（GitHub Actions用）
- * agent-twitter-client を使用（X APIクレジット不要・Cookie認証方式）
+ * agent-twitter-client を使用（X APIクレジット不要）
  *
- * 環境変数:
- *   X_ACCOUNT        : 'sunakun' | 'hal'
- *   TWEET_TEXT       : 投稿するテキスト
- *   -- すなくん用 --
- *   SUNAKUN_X_USERNAME  : Xユーザー名
- *   SUNAKUN_X_PASSWORD  : Xパスワード
- *   -- HAL用 --
- *   HAL_X_USERNAME      : Xユーザー名
- *   HAL_X_PASSWORD      : Xパスワード
+ * 2つの認証方式に対応:
+ * 方式1: OAuth 1.0a キー（loginWithV2）— APIクレジット不要
+ * 方式2: ユーザー名+パスワード+メール（login）— フォールバック
  */
 
 import { Scraper } from 'agent-twitter-client';
+import fs from 'fs';
 
 const account   = process.env.X_ACCOUNT || 'sunakun';
 const tweetText = process.env.TWEET_TEXT || '';
@@ -24,15 +19,6 @@ if (!tweetText.trim()) {
 }
 
 const isHal = account === 'hal';
-const username = isHal ? process.env.HAL_X_USERNAME : process.env.SUNAKUN_X_USERNAME;
-const password = isHal ? process.env.HAL_X_PASSWORD : process.env.SUNAKUN_X_PASSWORD;
-
-if (!username || !password) {
-  console.error(`❌ ${account.toUpperCase()} のXログイン情報が未設定です。`);
-  console.error('GitHub Secrets に以下を設定してください:');
-  console.error(isHal ? '  HAL_X_USERNAME / HAL_X_PASSWORD' : '  SUNAKUN_X_USERNAME / SUNAKUN_X_PASSWORD');
-  process.exit(1);
-}
 
 // 文字数チェック
 function countTwitterChars(text) {
@@ -45,70 +31,101 @@ function countTwitterChars(text) {
 
 const charCount = countTwitterChars(tweetText);
 console.log(`📝 投稿文字数: ${charCount}/280`);
-console.log(`🐦 [${account.toUpperCase()}] @${username} でXに投稿します...`);
+console.log(`🐦 [${account.toUpperCase()}] Xに投稿します...`);
 console.log(`投稿内容:\n${tweetText}\n`);
+
+function setOutput(key, value) {
+  if (process.env.GITHUB_OUTPUT) {
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+  }
+}
+
+async function tryLoginWithKeys(scraper) {
+  const appKey = isHal ? process.env.HAL_X_CONSUMER_KEY : process.env.X_CONSUMER_KEY;
+  const appSecret = isHal ? process.env.HAL_X_CONSUMER_SECRET : process.env.X_CONSUMER_SECRET;
+  const accessToken = isHal ? process.env.HAL_X_ACCESS_TOKEN : process.env.X_ACCESS_TOKEN;
+  const accessSecret = isHal ? process.env.HAL_X_ACCESS_SECRET : process.env.X_ACCESS_SECRET;
+
+  if (!appKey || !appSecret || !accessToken || !accessSecret) return false;
+
+  console.log('🔑 方式1: OAuth 1.0a キーでログイン...');
+  try {
+    await scraper.login(
+      undefined, undefined, undefined, undefined,
+      appKey, appSecret, accessToken, accessSecret
+    );
+    const ok = await scraper.isLoggedIn();
+    console.log(ok ? '✅ OAuth 1.0a ログイン成功' : '❌ OAuth 1.0a ログイン失敗');
+    return ok;
+  } catch (e) {
+    console.error('❌ OAuth 1.0a エラー:', e.message?.slice(0, 200));
+    return false;
+  }
+}
+
+async function tryLoginWithPassword(scraper) {
+  const username = isHal ? process.env.HAL_X_USERNAME : process.env.SUNAKUN_X_USERNAME;
+  const password = isHal ? process.env.HAL_X_PASSWORD : process.env.SUNAKUN_X_PASSWORD;
+  const email = isHal ? process.env.HAL_X_EMAIL : process.env.SUNAKUN_X_EMAIL;
+
+  if (!username || !password) return false;
+
+  console.log('🔑 方式2: ユーザー名+パスワード+メールでログイン...');
+  try {
+    await scraper.login(username, password, email || undefined);
+    const ok = await scraper.isLoggedIn();
+    console.log(ok ? '✅ パスワードログイン成功' : '❌ パスワードログイン失敗');
+    return ok;
+  } catch (e) {
+    console.error('❌ パスワードログインエラー:', e.message?.slice(0, 200));
+    return false;
+  }
+}
 
 try {
   const scraper = new Scraper();
 
-  // ログイン
-  console.log('🔐 Xにログイン中...');
-  await scraper.login(username, password);
+  // 方式1: OAuth 1.0a キー
+  let loggedIn = await tryLoginWithKeys(scraper);
 
-  const loggedIn = await scraper.isLoggedIn();
+  // 方式2: ユーザー名+パスワード+メール
   if (!loggedIn) {
-    console.error('❌ Xへのログインに失敗しました。ユーザー名/パスワードを確認してください。');
+    loggedIn = await tryLoginWithPassword(scraper);
+  }
+
+  if (!loggedIn) {
+    console.error('❌ 全てのログイン方式が失敗しました');
+    setOutput('success', 'false');
     process.exit(1);
   }
-  console.log('✅ ログイン成功');
 
   // ツイート投稿
   console.log('📤 投稿中...');
   const result = await scraper.sendTweet(tweetText);
 
-  // レスポンスからツイートIDを抽出
   let tweetId = '';
   try {
     const body = await result.json();
     tweetId = body?.data?.create_tweet?.tweet_results?.result?.rest_id || '';
-  } catch (e) {
-    // JSONパース失敗時はレスポンスステータスで判定
-  }
+  } catch (e) {}
 
   if (result.ok || result.status === 200) {
     console.log(`✅ X投稿成功！${tweetId ? ` Tweet ID: ${tweetId}` : ''}`);
-    if (tweetId) console.log(`🔗 https://x.com/${username}/status/${tweetId}`);
-
-    // GitHub Actions の出力にセット
-    if (process.env.GITHUB_OUTPUT) {
-      const fs = await import('fs');
-      fs.appendFileSync(process.env.GITHUB_OUTPUT, `tweet_id=${tweetId}\n`);
-      fs.appendFileSync(process.env.GITHUB_OUTPUT, `success=true\n`);
-    }
+    if (tweetId) console.log(`🔗 https://x.com/i/web/status/${tweetId}`);
+    setOutput('tweet_id', tweetId);
+    setOutput('success', 'true');
   } else {
     console.error(`❌ X投稿失敗 (HTTP ${result.status})`);
-    try {
-      const errBody = await result.text();
-      console.error('レスポンス:', errBody.slice(0, 500));
-    } catch (e) {}
-
-    if (process.env.GITHUB_OUTPUT) {
-      const fs = await import('fs');
-      fs.appendFileSync(process.env.GITHUB_OUTPUT, `success=false\n`);
-    }
+    try { console.error('Response:', (await result.text()).slice(0, 500)); } catch (e) {}
+    setOutput('success', 'false');
     process.exit(1);
   }
 
-  // ログアウト
-  await scraper.logout();
-  console.log('🔓 ログアウト完了');
+  await scraper.logout().catch(() => {});
   process.exit(0);
 
 } catch (err) {
   console.error('❌ エラー:', err.message || err);
-  if (process.env.GITHUB_OUTPUT) {
-    const fs = await import('fs');
-    fs.appendFileSync(process.env.GITHUB_OUTPUT, `success=false\n`);
-  }
+  setOutput('success', 'false');
   process.exit(1);
 }
