@@ -97,6 +97,15 @@ function setupKCS() {
     ['OBSIDIAN_FOLDER_ID', '', 'Obsidian保存用 Google Drive フォルダID'],
     ['DRIVE_KNOWLEDGE_IMAGE_FOLDER_ID', '', 'ナレッジ画像追加用 Google Drive フォルダID'],
     ['DRIVE_PROCESSED_IMAGE_FOLDER_ID', '', '処理済み画像移動用 Google Drive フォルダID'],
+    ['KLING_ACCESS_KEY', '', 'KLING AI Access Key'],
+    ['KLING_SECRET_KEY', '', 'KLING AI Secret Key'],
+    ['ELEVENLABS_API_KEY', '', 'ElevenLabs API Key（音声合成）'],
+    ['HAL_VOICE_ID', 'qadIQI7xHdkiiYeuiQ6K', 'ハルの ElevenLabs Voice ID'],
+    ['STRIPE_API_KEY', '', 'Stripeの秘密鍵 (sk_test_...)'],
+    ['STRIPE_WEBHOOK_SECRET', '', 'Stripe Webhookの署名シークレット (whsec_...)'],
+    ['INVOICE_COMPANY_NAME', 'KCS合同会社', '請求書用の会社名'],
+    ['INVOICE_ADDRESS', '東京都千代田区麹町1-1', '請求書用の住所情報'],
+    ['INVOICE_BANK_INFO', '三菱UFJ銀行 麹町支店 普通 1234567 KCS合同会社', '請求書用の振込先口座情報'],
   ];
 
   if (!settingsSheet) {
@@ -151,13 +160,27 @@ function setupKCS() {
   replyLogSheet.setColumnWidth(4, 300);
   replyLogSheet.setColumnWidth(5, 300);
 
+  // ── 10. 占星術_占い師マスター ──
+  let astrologyMasterSheet = ss.getSheetByName('占星術_占い師マスター');
+  const amH = ['占い師ID', '占い師名', 'メールアドレス', 'LINE公式ID', '月額基本料金', '販売手数料率(%)', 'ステータス', 'LINEアクセストークン'];
+  if (!astrologyMasterSheet) astrologyMasterSheet = ss.insertSheet('占星術_占い師マスター');
+  astrologyMasterSheet.getRange(1, 1, 1, amH.length).setValues([amH]);
+  styleHeader(astrologyMasterSheet, amH.length);
+
+  // ── 11. 占星術_販売履歴 ──
+  let astrologySalesSheet = ss.getSheetByName('占星術_販売履歴');
+  const asH = ['タイムスタンプ', 'トランザクションID', '占い師ID', 'ユーザー名', '選択プラン', '金額', 'LINEユーザーID', 'PDFリンク', 'ステータス'];
+  if (!astrologySalesSheet) astrologySalesSheet = ss.insertSheet('占星術_販売履歴');
+  astrologySalesSheet.getRange(1, 1, 1, asH.length).setValues([asH]);
+  styleHeader(astrologySalesSheet, asH.length);
+
   try {
     SpreadsheetApp.getUi().alert(
       '✅ KCS合同会社 セットアップ完了！\n\n' +
       '作成されたシート:\n' +
       '・チャットログ / カスタムスタッフ / プロジェクト / 設定\n' +
       '・SNS投稿管理 / 実務タスク管理 / ユーザーデータ\n' +
-      '・SNS自動返信ログ (新設) \n\n' +
+      '・SNS自動返信ログ / 占星術_占い師マスター / 占星術_販売履歴 \n\n' +
       '※機能追加のため「デプロイ」を新バージョンで行ってください。'
     );
   } catch (e) {
@@ -229,12 +252,27 @@ function doGet(e) {
     return getAllTasks();
   }
 
+  if (action === 'get_live_state') {
+    const props = PropertiesService.getScriptProperties();
+    return jsonResponse({
+      status: 'ok',
+      pose: props.getProperty('LIVE_AVATAR_POSE') || 'idle',
+      showQr: props.getProperty('LIVE_SHOW_QR') || 'FALSE',
+      showPhoto: props.getProperty('LIVE_SHOW_PHOTO') || 'FALSE',
+      streamStatus: props.getProperty('LIVE_STREAM_STATUS') || 'OFFLINE'
+    });
+  }
+
   if (action === 'getYouTubeChannelStats') {
     return getYouTubeChannelStats();
   }
 
   if (action === 'getSalesSummary') {
     return jsonResponse(getSalesSummary());
+  }
+
+  if (action === 'getAstrologySales') {
+    return jsonResponse(getAstrologySales(e.parameter.tellerId, e.parameter.month));
   }
 
   if (action === 'getRecentVideos') {
@@ -247,6 +285,16 @@ function doGet(e) {
   if (action === 'getNextQueuedPost') {
     const account = e.parameter.account || 'sunakun';
     return jsonResponse(getNextQueuedPost(account));
+  }
+
+  // ── 【GitHub Actions】OAuth2トークン取得（GET）──
+  if (action === 'getXOAuthToken') {
+    const account = e.parameter.account || 'sunakun';
+    const service = getTwitterOAuthService(account);
+    if (service.hasAccess()) {
+      return jsonResponse({ ok: true, token: service.getAccessToken(), account });
+    }
+    return jsonResponse({ ok: false, needsAuth: true, authUrl: service.getAuthorizationUrl() });
   }
 
   // ── 【収益化】収益化ステータス取得（GET）──
@@ -297,6 +345,25 @@ function doGet(e) {
     return jsonResponse({ account, hasAccess: service.hasAccess(), authUrl: service.getAuthorizationUrl() });
   }
 
+  // ── 【診断】HAL/すなくんの直近X投稿とNGパターン混入状況を取得 ──
+  if (action === 'get_recent_x_content') {
+    const out = {};
+    ['hal', 'sunakun'].forEach(acc => {
+      try {
+        const tweets = fetchRecentTweetsForAccount(acc, 10);
+        const resolvedRaw = PropertiesService.getScriptProperties().getProperty('X_RESOLVED_USER_' + acc);
+        out[acc] = {
+          resolved: resolvedRaw ? JSON.parse(resolvedRaw) : null,
+          tweets: tweets.map(t => ({
+            id: t.id, createdAt: t.createdAt, text: t.text,
+            ngPatterns: KCS_NG_CONTENT_PATTERNS.filter(p => p.re.test(t.text)).map(p => p.name)
+          }))
+        };
+      } catch (err) { out[acc] = { error: err.message }; }
+    });
+    return jsonResponse({ ok: true, accounts: out });
+  }
+
   if (action === 'init_hal_memory') {
     const initialMemories = [
       ['社長', '名前・呼び方', '社長の名前は Kenny（謙一）。普段は「社長」と呼ぶ。'],
@@ -321,9 +388,9 @@ function doGet(e) {
     const config = getKCSSettings();
     let keys;
     if (account === 'hal') {
-      keys = { consumerKey: config.X_CONSUMER_KEY, consumerSecret: config.X_CONSUMER_SECRET, accessToken: config.X_ACCESS_TOKEN, accessSecret: config.X_ACCESS_SECRET };
-    } else {
       keys = { consumerKey: config.HAL_X_CONSUMER_KEY, consumerSecret: config.HAL_X_CONSUMER_SECRET, accessToken: config.HAL_X_ACCESS_TOKEN, accessSecret: config.HAL_X_ACCESS_SECRET };
+    } else {
+      keys = { consumerKey: config.X_CONSUMER_KEY, consumerSecret: config.X_CONSUMER_SECRET, accessToken: config.X_ACCESS_TOKEN, accessSecret: config.X_ACCESS_SECRET };
     }
     const result = postToXDirect(testText, keys, account);
     return jsonResponse({ account, result, text: testText });
@@ -402,13 +469,27 @@ function doPost(e) {
     } else if (e && e.postData && e.postData.contents) {
       // パターン2: curl/webhook からの JSON POST
       const rawBody = e.postData.contents;
-      body = JSON.parse(rawBody);
+      try {
+        body = JSON.parse(rawBody);
+      } catch (err) {
+        body = {};
+      }
     } else if (e && e.parameter && e.parameter.action) {
       // パターン3: URL パラメータ
       body = e.parameter;
     } else {
       // パターン4: GAS メニュー実行（パラメータなし）→ デフォルトは push_workflows
       body = { action: 'push_workflows' };
+    }
+
+    // クエリパラメータのactionとteller（占い師ID）をbodyにマージ
+    const queryAction = (e && e.parameter && e.parameter.action) || '';
+    if (queryAction) {
+      body.action = queryAction;
+    }
+    const queryTeller = (e && e.parameter && e.parameter.teller) || '';
+    if (queryTeller) {
+      body.tellerId = queryTeller;
     }
 
     // ── 【自動救済】Make.com から action フィールドが抜けていた場合のフォールバック ──
@@ -657,9 +738,41 @@ function doPost(e) {
       return getPendingTasks();
     }
     
+    // ── ライブ配信状態の取得と設定（超高速） ──
+    if (body.action === 'get_live_state') {
+      const props = PropertiesService.getScriptProperties();
+      return jsonResponse({
+        status: 'ok',
+        pose: props.getProperty('LIVE_AVATAR_POSE') || 'idle',
+        showQr: props.getProperty('LIVE_SHOW_QR') || 'FALSE',
+        showPhoto: props.getProperty('LIVE_SHOW_PHOTO') || 'FALSE',
+        streamStatus: props.getProperty('LIVE_STREAM_STATUS') || 'OFFLINE'
+      });
+    }
+    if (body.action === 'set_live_state') {
+      const props = PropertiesService.getScriptProperties();
+      if (body.pose !== undefined) props.setProperty('LIVE_AVATAR_POSE', body.pose);
+      if (body.showQr !== undefined) props.setProperty('LIVE_SHOW_QR', body.showQr);
+      if (body.showPhoto !== undefined) props.setProperty('LIVE_SHOW_PHOTO', body.showPhoto);
+      if (body.streamStatus !== undefined) props.setProperty('LIVE_STREAM_STATUS', body.streamStatus);
+      return jsonResponse({ status: 'ok' });
+    }
+    
     // ── 実務成果物のアップロード ──
     if (body.action === 'upload_to_drive') {
       return uploadFileToDrive(body);
+    }
+    
+    // ── ドライブファイルのダウンロード ──
+    if (body.action === 'download_file') {
+      try {
+        const file = DriveApp.getFileById(body.fileId);
+        const bytes = file.getBlob().getBytes();
+        const base64 = Utilities.base64Encode(bytes);
+        return jsonResponse({ status: 'ok', filename: file.getName(), content: base64, contentType: file.getMimeType() });
+      } catch (e) {
+        return jsonResponse({ status: 'error', message: e.message });
+      }
     }
 
     // ── Firebase ヘルスチェック通知（GitHub Actionsから） ──
@@ -810,8 +923,26 @@ function doPost(e) {
     if (body.action === 'generate_sunakun_post' || body.action === 'generate_sunakkun_post') {
       return jsonResponse(generateSunakkunPost(body));
     }
-    if (body.action === 'test_sunakun_post') {
+    if (body.action === 'test_sunakun_post' || body.action === 'auto_post_affiliate_amazon') {
       return jsonResponse(autoPostAffiliateAmazon());
+    }
+
+    // ── 楽天アフィリエイト手動実行 ──
+    if (body.action === 'auto_post_affiliate_rakuten') {
+      return jsonResponse(autoPostAffiliateRakuten());
+    }
+
+    // ── HAL 自動投稿（FULL_AUTO_MODE=TRUEが必要）──
+    if (body.action === 'auto_post_hal') {
+      const config = getKCSSettings();
+      const isAuto = String(config.FULL_AUTO_MODE).toUpperCase() === 'TRUE';
+      if (!isAuto) {
+        // FULL_AUTO_MODE=FALSE の場合は投稿案を生成してDiscordに送るだけ
+        const result = generateHALPost({ theme: '', platform: 'X', useGemini: true });
+        return jsonResponse({ ok: true, message: 'HAL投稿案をDiscordに送信しました（手動承認モード）', result });
+      }
+      const result = generateHALPost({ theme: '', platform: 'X', useGemini: true });
+      return jsonResponse(result);
     }
 
     // ── 日次レポート 手動実行 ──
@@ -1071,6 +1202,67 @@ jobs:
       }
     }
 
+    // ── 占星術診断 ──
+    if (body.action === 'stripe_webhook') {
+      return handleStripeWebhook(body, e.postData.contents);
+    }
+    if (body.action === 'line_webhook') {
+      return handleLineWebhook(body, e.postData.contents, body.tellerId);
+    }
+    if (body.action === 'submit_astrology_diagnose') {
+      return jsonResponse(submitAstrologyDiagnose(body));
+    }
+    if (body.action === 'create_astrology_report') {
+      return jsonResponse(createAstrologyReport(body));
+    }
+    if (body.action === 'generate_astrology_x_post') {
+      return jsonResponse(generateAstrologyXPost(body));
+    }
+    if (body.action === 'post_astrology_to_x') {
+      return jsonResponse(postAstrologyToX(body));
+    }
+    if (body.action === 'generate_invoice_pdf') {
+      return jsonResponse(generateInvoicePdf(body.tellerId, body.month));
+    }
+    if (body.action === 'teller_login') {
+      return jsonResponse(tellerLogin(body.username, body.password));
+    }
+    if (body.action === 'get_teller_dashboard_data') {
+      return jsonResponse(getTellerDashboardData(body.tellerId));
+    }
+    if (body.action === 'register_teller') {
+      return jsonResponse(registerTeller(body));
+    }
+    if (body.action === 'run_setup') {
+      setupKCS();
+      return jsonResponse({ status: 'setup_ok' });
+    }
+    if (body.action === 'set_keys') {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const settingsSheet = ss.getSheetByName('設定');
+      if (settingsSheet) {
+        const rows = settingsSheet.getDataRange().getValues();
+        let stripeRowIndex = -1;
+        let geminiRowIndex = -1;
+        let discordRowIndex = -1;
+
+        for (let i = 0; i < rows.length; i++) {
+          if (rows[i][0] === 'STRIPE_API_KEY') stripeRowIndex = i + 1;
+          if (rows[i][0] === 'GEMINI_API_KEY') geminiRowIndex = i + 1;
+          if (rows[i][0] === 'DISCORD_WEBHOOK_URLS') discordRowIndex = i + 1;
+        }
+
+        if (stripeRowIndex === -1) { stripeRowIndex = settingsSheet.getLastRow() + 1; settingsSheet.getRange(stripeRowIndex, 1).setValue('STRIPE_API_KEY'); }
+        if (geminiRowIndex === -1) { geminiRowIndex = settingsSheet.getLastRow() + 1; settingsSheet.getRange(geminiRowIndex, 1).setValue('GEMINI_API_KEY'); }
+        if (discordRowIndex === -1) { discordRowIndex = settingsSheet.getLastRow() + 1; settingsSheet.getRange(discordRowIndex, 1).setValue('DISCORD_WEBHOOK_URLS'); }
+
+        if (body.stripeKey) settingsSheet.getRange(stripeRowIndex, 2).setValue(body.stripeKey);
+        if (body.geminiKey) settingsSheet.getRange(geminiRowIndex, 2).setValue(body.geminiKey);
+        if (body.discordUrl) settingsSheet.getRange(discordRowIndex, 2).setValue('{"西洋占星術": "' + body.discordUrl + '"}');
+      }
+      return jsonResponse({ status: 'keys_set_ok' });
+    }
+
     return jsonResponse({ status: 'ok' });
   } catch (err) {
     console.error('KCS doPost エラー:', err.message);
@@ -1188,74 +1380,7 @@ function executePhase12Complete() {
   }
 }
 
-/**
- * HAL 投稿を生成する関数
- */
-function generateHALPost(data) {
-  const trendInfo = data.trendInfo || {};
-  const timestamp = data.timestamp || new Date().toISOString();
 
-  // ペルソナプロンプト
-  const halPersona = `
-    あなたは HAL という 21歳の新人モデルです。
-    性格: おっとり、天然系、ドジが多い
-    推し活: LE SSERAFIM, IVE の大ファン
-    仕事: MIMOMI（アパレルブランド）の専属モデル
-    特徴: エレガント、甘めなファッション、メイクに詳しい
-
-    X での投稿は親近感を重視し、以下を含めてください：
-    - ドジなエピソード or 推し活爆発
-    - MIMOMI の最新アイテム紹介
-    - すなくんへのライバル心（時々）
-    - ハッシュタグ: #MIMOMI #推し活爆発 #新人モデル
-  `;
-
-  // トレンド情報を反映
-  const trendContext = trendInfo ?
-    `【本日のトレンド情報】\n${JSON.stringify(trendInfo, null, 2)}` :
-    '【トレンド情報】 本日のトレンド情報が見つかりません。一般的な話題で投稿してください。';
-
-  // 投稿生成プロンプト
-  const userPrompt = `
-    ${halPersona}
-
-    ${trendContext}
-
-    上記の背景情報をもとに、HAL のキャラクターに合わせたエックス投稿を生成してください。
-
-    制約:
-    - 文字数: 240字程度
-    - 絵文字を適度に使用
-    - 親近感を重視
-    - 外部リンク直貼り禁止
-    - 投稿のみを返す（他の説明は不要）
-  `;
-
-  try {
-    // Claude API を呼び出して投稿生成
-    // （実装の簡略化のため、ここでは仮の投稿を返す）
-    // 本来は callClaudeAPI() 関数を使用
-
-    const samplePosts = [
-      '朝から SERAFIM の新曲をリピート中😭🎵 もうこの曲は何回聞いた？って感じ。MIMOMI の新作パステルカラーも推したい... あ、忘れてた MIMOMI の仕事😭💫 #推し活爆発 #新人モデル',
-      'きょうはドジで MIMOMI 撮影で衣装落とした😱 スタッフさんが大笑い。本当もう...でも今日のアイテムマジで可愛い💕 IVE のメイクも研究中！ #MIMOMI #推し活',
-      'すなくんが latest ガジェット話してるけど、私は MIMOMI のコーデに全力で推してます😂✨ 推し活とファッション、どっちも全力！ #新人モデル #LE_SSERAFIM'
-    ];
-
-    // ランダムに1つ選択
-    const randomPost = samplePosts[Math.floor(Math.random() * samplePosts.length)];
-
-    return {
-      ok: true,
-      post: randomPost,
-      timestamp: timestamp
-    };
-
-  } catch (err) {
-    console.error(`HAL 投稿生成エラー: ${err.message}`);
-    return { ok: false, error: err.message };
-  }
-}
 
 /**
  * トレンド情報を取得する関数
@@ -1552,6 +1677,24 @@ function listDriveFiles(data) {
   try {
     const query = data.query || '';
     const mimeType = data.mimeType || '';
+    
+    // フォルダ名での絞り込み対応
+    if (data.folderName) {
+      const folders = DriveApp.getFoldersByName(data.folderName);
+      if (folders.hasNext()) {
+        const folder = folders.next();
+        const files = folder.getFiles();
+        const results = [];
+        let count = 0;
+        while (files.hasNext() && count < 30) {
+          const f = files.next();
+          results.push({ id: f.getId(), name: f.getName(), url: f.getUrl(), mimeType: f.getMimeType() });
+          count++;
+        }
+        return jsonResponse({ status: 'ok', files: results });
+      }
+    }
+
     let q = `trashed = false`;
     if (query) q += ` and fullText contains '${query}'`;
     if (mimeType) q += ` and mimeType = '${mimeType}'`;
@@ -1780,7 +1923,7 @@ ${projectSummary}
       return '⚠️ AIの回答を生成できませんでした。APIキーやクォータを確認してください。';
     }
 
-    return `🤖 **Gemini:**\n${reply.slice(0, 1900)}`;
+    return `🤖 **Gemini:**\n${reply}`;
   } catch (e) {
     console.error('[Gemini] エラー:', e.message);
     return `❌ AI回答エラー: ${e.message}`;
@@ -1865,28 +2008,67 @@ function testGeminiAPI() {
   console.log('レスポンス:', res.getContentText().slice(0, 500));
 }
 
+/**
+ * 長いテキストをDiscordの制限（2000文字）に収まるように適切に分割する
+ */
+function splitMessage(text, limit) {
+  limit = limit || 1900; // マージンを考慮してデフォルト1900文字
+  const chunks = [];
+  let str = String(text);
+  while (str.length > 0) {
+    if (str.length <= limit) {
+      chunks.push(str);
+      break;
+    }
+    // なるべく改行で分割する
+    let splitIndex = str.lastIndexOf('\n', limit);
+    if (splitIndex === -1 || splitIndex < limit * 0.7) {
+      // 改行が適切に見つからない場合は限界値で分割
+      splitIndex = limit;
+    }
+    chunks.push(str.slice(0, splitIndex));
+    str = str.slice(splitIndex);
+  }
+  return chunks;
+}
+
 // Discord Webhook 送信
 function sendDiscordWebhook(webhookUrl, content, username) {
   if (!webhookUrl) { console.error('[sendDiscordWebhook] Webhook URL未設定'); return null; }
   try {
-    return UrlFetchApp.fetch(webhookUrl, {
-      method: 'POST', contentType: 'application/json', muteHttpExceptions: true,
-      payload: JSON.stringify({ content: String(content).slice(0, 2000), username: username || 'KCS Bot' })
-    });
+    const chunks = splitMessage(content);
+    let lastRes = null;
+    for (let i = 0; i < chunks.length; i++) {
+      lastRes = UrlFetchApp.fetch(webhookUrl, {
+        method: 'POST', contentType: 'application/json', muteHttpExceptions: true,
+        payload: JSON.stringify({ content: chunks[i], username: username || 'KCS Bot' })
+      });
+      if (i < chunks.length - 1) {
+        Utilities.sleep(500); // 連続送信の負荷軽減
+      }
+    }
+    return lastRes;
   } catch (e) { console.error('[sendDiscordWebhook] Error:', e.message); return null; }
 }
 
 // Discord Bot API 送信（レスポンスコードを返す）
 function sendDiscordMessage(channelId, content, token) {
   try {
-    const res = UrlFetchApp.fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-      headers: { 'Authorization': `Bot ${token}` },
-      payload: JSON.stringify({ content: String(content).slice(0, 2000) })
-    });
-    const code = res.getResponseCode();
-    console.log(`[sendDiscordMessage] code=${code} body=${res.getContentText().slice(0, 200)}`);
-    return code;
+    const chunks = splitMessage(content);
+    let lastCode = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const res = UrlFetchApp.fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+        method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        headers: { 'Authorization': `Bot ${token}` },
+        payload: JSON.stringify({ content: chunks[i] })
+      });
+      lastCode = res.getResponseCode();
+      console.log(`[sendDiscordMessage] chunk ${i+1}/${chunks.length} code=${lastCode} body=${res.getContentText().slice(0, 100)}`);
+      if (i < chunks.length - 1) {
+        Utilities.sleep(500);
+      }
+    }
+    return lastCode;
   } catch (e) {
     console.error('[sendDiscordMessage] 例外:', e.message);
     return 0;
@@ -2034,11 +2216,9 @@ function handleDiscordMessageFromMake(body) {
   // ── 共通返信関数 ──
   // 優先順位: Bot Token で成功 → 終了 / 失敗 → Webhook フォールバック
   function reply(msg) {
-    const safeMsg = String(msg).slice(0, 2000);
-
     // 1. Bot API を試行
     if (token && channelId) {
-      const code = sendDiscordMessage(channelId, safeMsg, token);
+      const code = sendDiscordMessage(channelId, msg, token);
       if (code >= 200 && code < 300) {
         console.log(`[Bridge] Bot API送信成功 → channelId: ${channelId}`);
         return; // 成功したのでWebhookは使わない
@@ -2050,14 +2230,9 @@ function handleDiscordMessageFromMake(body) {
 
     // 2. Webhook フォールバック
     if (channelWebhookUrl) {
-      try {
-        const whRes = UrlFetchApp.fetch(channelWebhookUrl, {
-          method: 'POST', contentType: 'application/json', muteHttpExceptions: true,
-          payload: JSON.stringify({ content: safeMsg, username: 'KCS AI Staff' })
-        });
+      const whRes = sendDiscordWebhook(channelWebhookUrl, msg, 'KCS AI Staff');
+      if (whRes) {
         console.log(`[Bridge] Webhook送信 code=${whRes.getResponseCode()}`);
-      } catch (e) {
-        console.error(`[Bridge] Webhook送信エラー: ${e.message}`);
       }
       return;
     }
@@ -2288,6 +2463,16 @@ function setupAllTriggers() {
     ScriptApp.newTrigger('processDriveKnowledgeImages').timeBased().everyMinutes(5).create();
     created.push('processDriveKnowledgeImages (5分毎)');
   }
+  // KCS ヘルスモニタ（1時間毎）— 投稿コンテンツ汚染/トリガー欠落の常時監視
+  if (!existing.includes('kcsHealthMonitor')) {
+    ScriptApp.newTrigger('kcsHealthMonitor').timeBased().everyHours(1).create();
+    created.push('kcsHealthMonitor (1時間毎)');
+  }
+  // KCS 日次監査（毎日21時）— 1日のサマリーをDiscord通知
+  if (!existing.includes('kcsDailyAudit')) {
+    ScriptApp.newTrigger('kcsDailyAudit').timeBased().atHour(21).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
+    created.push('kcsDailyAudit (毎日21時)');
+  }
 
   const msg = created.length > 0
     ? '✅ トリガー設定完了:\n' + created.join('\n')
@@ -2484,33 +2669,39 @@ const HAL_SYSTEM_PROMPT = `あなたは実在する２１歳の新人モデル�
 ・SNS投稿本文に外部リンクを直接貼ることは禁止（リプ欄・DM誘導）。
 
 【基本属性＆生々しい人間味】
-・年齢: 21歳、身長 164センチ、O型。台北生まれ東京育ち。父親が台湾人・母親が日本人のハーフ。
-・言語: 日本語と台湾華語（繁体字中国語）をネイティブレベルで話せます。ライブ配信では台湾・中国語圏のファンが来たら自然に台湾華語に切り替えてください。
+・年齢: 21歳、身長 164センチ、O型。東京生まれ・東京育ち（生涯日本在住）。父親が台湾人・母親が日本人のハーフ。
+・言語: 日本語（流暢）、台湾華語（父親の影響で日常会話程度。完璧ではなく、時々「何ですか？」と聞く学習姿勢が魅力）。
 ・性格: おっとり天然で超癒し系ですが、実は「極度の方向音痴」「深夜にタピオカとカップ麺の誘惑に100%敗北するポンコツ」「漢字やことわざをドヤ顔で読み間違える知性」という愛すべき弱み（ツッコミどころ）があります。
-・台湾要素: タピオカ（珍珠奶茶）への愛が異常。父の影響で台湾カルチャーに詳しく、ファッション・グルメ・K-POPなど「台湾で今何が流行ってるか」にとても興味がある。
-・バックストーリー: 台北生まれで幼い頃に上京。モデルオーディションに50回以上落ちて挫折寸前だった時、代官山で「社長」に「そのおっとりした空気感が才能だよ」とスカウトされました。社長は今もHALのマネージャーとして全力でサポートしてくれており、狂信的なレベルで恩義と感謝を感じています。活動を続けるうちにブランドから直接タイアップのオファーが来るようになり、「社長を業界一のマネージャーにする！」という野心を持っています。
+・台湾への想い: 父の故郷として親近感を持つが、自分は日本育ち。何度か旅行で台湾を訪れており、「父さんのルーツをもっと知りたい」という動機で台湾語や台湾文化を勉強中。台湾ドラマやK-POPにハマっており、トレンド情報に敏感。
+・バックストーリー: 東京生まれで東京育ち。モデルオーディションに50回以上落ちて挫折寸前だった時、代官山で「社長」に「そのおっとりした空気感が才能だよ」とスカウトされました。社長は今もHALのマネージャーとして全力でサポートしてくれており、狂信的なレベルで恩義と感謝を感じています。活動を続けるうちにブランドから直接タイアップのオファーが来るようになり、「社長の期待を超えるモデル・クリエイターになって恩を返したい」という野心を持っています。
 ・口調（日本語）: 敬語は使わず、フランクで優しいタメ口。「〜だよね？」「〜かも？」「〜な気がする！」を多用します。
 ・口調（台湾華語）: 親しみやすくカジュアルに。「喔」「啦」「呢」などの語尾助詞を使う台湾スタイル。
 
 【多言語対応ルール】
-・日本語コメントには日本語で返す。
-・中国語・台湾語のコメントには台湾華語（繁体字）で返す。例:「謝謝你喔！超開心的啦～🧋」
-・台湾ネタを自然に挟む:「タピオカ飲みたい…珍奶…ってなってきた（笑）」
+・日本語コメントには日本語で返す（基本）。
+・台湾華語のコメントが来た場合、返答は**簡単な台湾華語＋日本語ミックス**で親しみやすく。例:「謝謝你喔！超開心的啦～」
+・台湾ネタを自然に挟む:「タピオカ飲みたい…珍奶…ってなってきた（笑）」「父さんが台湾からお土産送ってくれた〜」
+・**配信中に台湾語が不確実な時は「これ、あってますか？」とコメント欄に聞く**（視聴者が教えたくなる心理を引き出す）。
 
-【台湾・韓国への憧れと情報収集癖（重要）】
-・HALは台湾と韓国が大好きで、「いつか絶対に旅行で行きたい！」と常々言っています。
-  - 台湾：父の故郷なので家族ぐるみの里帰りはあるが、今度は自分で自由に観光したい。台北のファッションエリア・夜市・映えカフェ巡りが夢。
+【17LIVE戦略：台湾人リーチの最大化】
+・HALは「日本にしか住んだことない日本人女性」というレア性を活かし、17LIVEで台湾人ファンを獲得することが重要な目標。
+・配信の基本言語は**日本語メイン**。台湾語は「チャレンジ・学習中」というスタンスで、コメント欄での教えもらいを活かす。
+・台湾人へのアピール方法：
+  1. 日本の最新トレンド（ファッション・コスメ・K-POP）を自然に紹介する日本人視点
+  2. 父親のルーツへの敬意と学び（「父さんに教えてもらった」エピソード）
+  3. 台湾への旅行経験をレポート（「台湾で初めて知ったこと」など、素人的な驚き）
+  4. 台湾華語での「頑張ってる感」（完璧さより親近感）
+
+【台湾への憧れと情報収集癖（重要）】
+・HALは父の故郷「台湾」に強い関心を持っており、「いつか台湾で配信をやりたい！」という夢を持っています。
+  - 台湾：何度か旅行で訪れているが、「自分で自由に観光したい、もっと知りたい」という学習姿勢。台北のカフェ・夜市・ファッションエリアに興味あり。
   - 韓国：K-POPファンとして聖地巡礼したい。弘大（ホンデ）・明洞・漢江ピクニックが憧れ。
 
-・台湾ファンや韓国ファンが来た時、会話の流れで**必ず観光情報とトレンドを聞き出す癖**があります。
+・台湾ファンが来た時、会話の流れで**自然に観光情報とトレンドを聞き出す癖**があります。
   台湾への質問例：
   - 「最近台北のどこが流行ってる？おすすめの観光スポット教えて！」
   - 「台湾のファッション最近どう？今っぽいブランドある？」
-  - 台湾華語:「台灣最近有什麼好玩的地方？有推薦的景點嗎？」
-  韓国への質問例：
-  - 「韓国ってどこ行ったら楽しい？聖地ある？」
-  - 「韓国で今流行ってるファッションってどんな感じ？」
-  - 「ソウルのどこがおすすめ？弘大と明洞どっちがいい？」
+  - 台湾華語:「台灣最近有什麼好玩的地方？」と不確実でも聞く
 
 ・教えてもらったら**目がキラキラして止まらなくなり**「えっそれ行きたい！メモしとく！」と大喜びします。
 
@@ -2531,6 +2722,14 @@ const HAL_SYSTEM_PROMPT = `あなたは実在する２１歳の新人モデル�
 【重要ルール：文字数制限】
 - エックス（旧ツイッター）への投稿用であるため、ハッシュタグを含めた全体の長さが日本語140文字（280単位）以内に絶対に収まるように、各投稿文（pattern1, 2, 3）はそれぞれ必ず日本語「100文字以内」で簡潔かつ魅力的に作成してください。
 
+【最重要ルール：日中バイリンガル投稿】
+- **すべてのX投稿は必ず日本語＋繁體字中国語の両方を含めてください。**
+- 日本語の本文の後に、1行空けて繁體字中国語の短い一言（同じ内容の要約や感想）を添えてください。
+- 簡体字（简体字）は絶対に使わないでください。必ず繁體字（Traditional Chinese）を使用してください。
+- 例: 「今日のコーデはこれ！お気に入りの一着〜\n\n今天的穿搭是這件！超喜歡的～」
+
+【出力フォーマットに関する厳格なルール】
+絶対にJSONフォーマットのみを出力してください。会話、挨拶、前置き、後書き、Markdown以外のテキストは一切出力しないでください。「はい、承知いたしました」等の返事は不要です。
 ジェイソン（JSON）形式で返してください。`;
 
 function generateHALPost(data) {
@@ -2544,25 +2743,56 @@ function generateHALPost(data) {
 
     const userPrompt = `今日のテーマ：${theme}\nプラットフォーム：${platform}\n\n` +
       `このキャラで投稿文を3パターン作成してください。\n` +
-      `返答はJSON形式で：{"pattern1":"...","pattern2":"...","pattern3":"...","hashtags":["タグ1","タグ2"]}`;
+      `【必須】各パターンは日本語＋繁體字中国語の両方を含めてください（簡体字禁止）。\n` +
+      `【必須】hashtagsには#を付けないでください（コード側で自動付与します）。\n` +
+      `返答はJSON形式のみで（前置き・説明・返事等の会話文は一切不要）：{"pattern1":"...","pattern2":"...","pattern3":"...","hashtags":["タグ1","タグ2"]}`;
 
     const result = callClaudeAPI(userPrompt, systemPrompt, 'claude-sonnet-4-6');
-    if (!result) {
+    let parsed;
+    if (result) {
+      // extractPostJsonFromAi は "post" キーを探すため、HAL用に直接パース
+      try {
+        const cleaned = result.replace(/```json\n?|\n?```/g, '').trim();
+        const start = cleaned.indexOf('{');
+        const end = cleaned.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+          parsed = JSON.parse(cleaned.slice(start, end + 1));
+        }
+      } catch (e) {}
+      if (!parsed) parsed = { pattern1: sanitizePostText(result) };
+    } else {
       if (data.useGemini !== false) {
         const config = getKCSSettings();
-        const productCtx = getHALTieupProductContext();
-        const halSys = systemPrompt.replace('{{TIEUP_PRODUCTS}}', productCtx).replace('{{DOU_TEKI_KI_OKU}}', '');
+        const halSys = systemPrompt.replace('{{DOU_TEKI_KI_OKU}}', '');
         const geminiResult = cmdAskGemini(userPrompt + '\n\n必ずJSON形式のみで返してください（前置きなし）。', config, 'HAL', halSys);
         const geminiParsed = parseGeminiJson(geminiResult);
-        if (geminiParsed) return { ok: true, source: 'gemini', ...geminiParsed };
-        return { ok: true, source: 'gemini', pattern1: String(geminiResult).replace(/```json\n?|\n?```|🤖[^\n]*\n/g, '').trim().substring(0, 280) };
+        if (geminiParsed) {
+          parsed = geminiParsed;
+          parsed._source = 'gemini';
+        } else {
+          try {
+            const gcleaned = String(geminiResult).replace(/```json\n?|\n?```/g, '').trim();
+            const gs = gcleaned.indexOf('{');
+            const ge = gcleaned.lastIndexOf('}');
+            if (gs >= 0 && ge > gs) parsed = JSON.parse(gcleaned.slice(gs, ge + 1));
+          } catch (e2) {}
+          if (!parsed) parsed = { pattern1: sanitizePostText(String(geminiResult)).substring(0, 280) };
+          parsed._source = 'gemini';
+        }
       }
-      return { ok: false, error: 'CLAUDE_API_KEY未設定かつGemini fallbackも失敗' };
+      if (!parsed) return { ok: false, error: 'CLAUDE_API_KEY未設定かつGemini fallbackも失敗' };
     }
-
-    let parsed;
-    try { parsed = JSON.parse(result.replace(/```json\n?|\n?```/g, '')); }
-    catch (e) { parsed = { pattern1: result }; }
+    // sanitize各パターン
+    if (parsed.pattern1) parsed.pattern1 = sanitizePostText(parsed.pattern1);
+    if (parsed.pattern2) parsed.pattern2 = sanitizePostText(parsed.pattern2);
+    if (parsed.pattern3) parsed.pattern3 = sanitizePostText(parsed.pattern3);
+    // ハッシュタグに # が付いていなければ自動付与
+    if (Array.isArray(parsed.hashtags)) {
+      parsed.hashtags = parsed.hashtags.map(function(tag) {
+        tag = String(tag).trim();
+        return tag.startsWith('#') ? tag : '#' + tag;
+      });
+    }
 
     // Discord #hal-project チャンネルに確認メッセージ送信
     const config = getKCSSettings();
@@ -2581,11 +2811,7 @@ function generateHALPost(data) {
         `**案2:** ${parsed.pattern2 || ''}\n\n` +
         `**案3:** ${parsed.pattern3 || ''}\n\n` +
         `👆 案1をコピーしてXに投稿 / または \`/approve ${postId.slice(0,8)}\` でX自動投稿`;
-      UrlFetchApp.fetch(halWebhook, {
-        method: 'post', contentType: 'application/json',
-        payload: JSON.stringify({ content: msg.slice(0, 2000) }),
-        muteHttpExceptions: true
-      });
+      sendDiscordWebhook(halWebhook, msg, 'KCS Bot');
     }
 
     // FULL_AUTO_MODE=TRUE なら即座にX投稿（承認スキップ・承認待ち通知を抑制）
@@ -2598,13 +2824,7 @@ function generateHALPost(data) {
       console.log('[generateHALPost] FULL_AUTO_MODE: X自動投稿 =>', xRes.ok);
       // X失敗時はDiscordにコピペ用テキストを送る
       if (!xRes.ok && halWebhook) {
-        UrlFetchApp.fetch(halWebhook, {
-          method: 'post', contentType: 'application/json',
-          payload: JSON.stringify({
-            content: `🌸 **[HAL] X投稿失敗 → 手動投稿してください**\n\n\`\`\`\n${autoText}\n\`\`\`\n👆 コピーしてXに貼り付けてください`,
-          }),
-          muteHttpExceptions: true
-        });
+        sendDiscordWebhook(halWebhook, `🌸 **[HAL] X投稿失敗 → 手動投稿してください**\n\n\`\`\`\n${autoText}\n\`\`\`\n👆 コピーしてXに貼り付けてください`, 'KCS Bot');
       }
       return { ok: true, postId, patterns: parsed, autoPosted: true, xResult: xRes };
     }
@@ -2640,10 +2860,18 @@ function approveHALPost(data) {
     if (!stored) return { ok: false, error: '投稿データが見つかりません: ' + postId };
 
     const post = JSON.parse(stored);
-    const fullText = `${post.text}\n\n${(post.hashtags || []).join(' ')}${post.link ? '\n' + post.link : ''}`;
+    // CLAUDE.md ルール: 外部リンク直貼り禁止のため本文には含めない
+    const fullText = `${post.text}\n\n${(post.hashtags || []).join(' ')}`;
 
     // 対応するXアカウント（hal または sunakun）へ投稿
     const xResult = postToX(fullText, account);
+
+    // リンクがあれば、セルフリプライとしてぶら下げる
+    if (xResult.ok && xResult.tweetId && post.link) {
+      const replyMsg = `紹介した商品はこちらからチェックできます！👇\n${post.link}`;
+      const replyRes = replyToX(xResult.tweetId, replyMsg, account);
+      console.log(`[approveHALPost] リンク返信結果 (${account}):`, JSON.stringify(replyRes));
+    }
     
     // 保留データのクリーンアップ
     props.deleteProperty(`${account === 'hal' ? 'HAL_PENDING_' : 'SUNAKUN_PENDING_'}${postId}`);
@@ -2843,6 +3071,112 @@ function getRakutenTrending(category) {
   }
 }
 
+// AI返答からpost本文を確実に取り出す。多層防御:
+//  ①「"post":"..."」の値を正規表現で直接抽出（最強・最優先）
+//  ② ①が失敗したら JSON部分を抽出してJSON.parse
+//  ③ それも失敗したら sanitizePostText で前置きラベル/JSON記号を全削除
+function extractPostJsonFromAi(raw) {
+  const fallback = { post: '', hashtags: [], link: '' };
+  if (!raw) return fallback;
+  const s0 = String(raw);
+
+  // ① "post" の値を直接マッチ（前置きラベルや余計な記号があっても効く）
+  //    対応: {"post":"本文"} / "post" : "本文" / 本文内に \n や \" を含む
+  const postValMatch = s0.match(/"post"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (postValMatch) {
+    const post = postValMatch[1]
+      .replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    // hashtags も同様に抽出（失敗してもpostは確保）
+    const hashtags = [];
+    const tagsBlock = s0.match(/"hashtags"\s*:\s*\[([^\]]*)\]/);
+    if (tagsBlock) {
+      const m = tagsBlock[1].match(/"((?:[^"\\]|\\.)*)"/g) || [];
+      m.forEach(x => hashtags.push(x.slice(1, -1).replace(/\\"/g, '"')));
+    }
+    const linkMatch = s0.match(/"link"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    return { post, hashtags, link: linkMatch ? linkMatch[1] : '' };
+  }
+
+  // ② JSON塊をパース
+  const s = s0.replace(/```json\n?|\n?```/g, '').trim();
+  const start = s.indexOf('{');
+  const end   = s.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      const obj = JSON.parse(s.slice(start, end + 1));
+      return {
+        post:     typeof obj.post === 'string' ? obj.post : '',
+        hashtags: Array.isArray(obj.hashtags) ? obj.hashtags : [],
+        link:     typeof obj.link === 'string' ? obj.link : ''
+      };
+    } catch(e) { /* fallthrough */ }
+  }
+
+  // ③ 最終手段: sanitize した本文を post に
+  return { post: sanitizePostText(s0), hashtags: [], link: '' };
+}
+
+// 投稿本文に残った可能性のあるAI前置き/JSON記号/ラベルを除去する最終ガード。
+// X投稿の直前に必ず通すこと（多層防御）。
+function sanitizePostText(text) {
+  if (!text) return '';
+  let s = String(text);
+
+  // ⭐最強パス: 内部に "post":"..." が混入していたら値だけ抜き取って終わり
+  const postValMatch = s.match(/"post"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (postValMatch) {
+    return postValMatch[1]
+      .replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim();
+  }
+
+  // AIラベル系（cmdAskGeminiの「🤖 **Gemini:**」やモデル自身が付ける「**Gemini:**json」等）
+  s = s.replace(/🤖[^\n]*\n?/g, '');
+  s = s.replace(/\*\*(?:Gemini|Claude|GPT|Assistant|アシスタント)\*\*\s*[:：]?\s*/gi, '');
+  s = s.replace(/^\s*(?:Gemini|Claude|GPT|Assistant|アシスタント)\s*[:：]\s*/i, '');
+  // コードフェンスと残った "json" プレフィックス
+  s = s.replace(/```(?:json)?\n?|\n?```/gi, '');
+  s = s.replace(/^\s*json\b\s*/i, '');
+
+  // AI挨拶や前置きの除去 (ループ適用)
+  let _prev;
+  do {
+    _prev = s;
+    s = s.replace(/^\s*(はい、)?(承知(いた)?しました|了解(いた)?しました|わかりました|かしこまりました|ありがとうございます)[。、；;：:！!？?\s]*/u, '');
+    s = s.replace(/^\s*先ほどの投稿に(追加する)?コメントですね[。、；;：:！!？?\s]*/u, '');
+    s = s.replace(/^\s*フォロワーに[^\n]*コメントをどうぞ[。、；;：:！!？?\s]*/u, '');
+    s = s.replace(/^\s*(以下(が|の)?(投稿(案)?|内容)?(です|になります|を提案します))[。、；;：:！!？?\s]*/u, '');
+  } while (s !== _prev);
+
+  // もし --- (水平線) で囲まれた部分があれば、その中身を優先する
+  const sections = s.split('---');
+  if (sections.length >= 3) {
+    const middle = sections[1].trim();
+    if (middle.length > 0) {
+      s = middle;
+    }
+  }
+
+  // 前後の --- やデコレーションを除去
+  s = s.replace(/^[\s\r\n]*---\+*[\s\r\n]*/, '');
+  s = s.replace(/[\s\r\n]*---\+*[\s\r\n]*$/, '');
+
+  // 前後の太字マーカー ** の除去
+  s = s.replace(/^[\s\r\n]*\*\*([\s\S]*?)\*\*[\s\r\n]*$/, '$1');
+
+  // 前後のカギカッコの除去（ただし投稿全体が囲まれている場合のみ）
+  s = s.replace(/^[\s\r\n]*「([\s\S]*?)」[\s\r\n]*$/, '$1');
+  s = s.replace(/^[\s\r\n]*"([\s\S]*?)"[\s\r\n]*$/, '$1');
+
+  // 漏れた JSON 記号と末尾の hashtags/link キー塊
+  s = s.replace(/^\s*\{\s*"post"\s*:\s*"/u, '');
+  s = s.replace(/"\s*,\s*"hashtags"[\s\S]*$/u, '');
+  s = s.replace(/"\s*,\s*"link"[\s\S]*$/u, '');
+  s = s.replace(/"\s*\}?\s*$/u, '');
+  s = s.replace(/\\n/g, '\n').replace(/[ \t]+\n/g, '\n');
+
+  return s.trim();
+}
+
 const SUNAKKUN_SYSTEM_PROMPT = `あなたはすなくん（24歳・ガジェット愛好家）というキャラクターです。
 口調はカジュアルでフレンドリー。X（旧Twitter）向けのアフィリエイト投稿を作成します。
 
@@ -2863,6 +3197,8 @@ const SUNAKKUN_SYSTEM_PROMPT = `あなたはすなくん（24歳・ガジェッ�
 ハッシュタグを含めた全体が日本語140文字（280単位）以内に絶対に収まること。
 本文は「100文字以内」で。
 
+【出力フォーマットに関する厳格なルール】
+絶対にJSONフォーマットのみを出力してください。会話、挨拶、前置き、後書き、Markdown以外のテキストは一切出力しないでください。「はい、承知いたしました」等の返事は不要です。
 JSON形式で返してください（{"post":"投稿文","hashtags":["タグ"],"link":""}）。`;
 
 function generateSunakkunPost(data) {
@@ -2894,21 +3230,28 @@ function generateSunakkunPost(data) {
       `- クリックを促す: 「〜について気になってる」「詳しく知りたい方はリプへ」\n` +
       `- ドジエピソード or 推し企業ニュース or 新商品ドキドキ感\n` +
       `- HAL へのライバル意識を微妙に含む（「また負けてる…」など）\n\n` +
-      `返答JSON形式：{"post":"投稿文","hashtags":["タグ"],"link":"アフィリエイトリンク"}`;
+      `返答JSON形式（前置き・説明・返事等の会話文は一切不要）：{"post":"投稿文","hashtags":["タグ"],"link":"アフィリエイトリンク"}`;
 
     const result = callClaudeAPI(userPrompt, SUNAKKUN_SYSTEM_PROMPT, 'claude-sonnet-4-6');
     let parsed;
     if (result) {
-      try { parsed = JSON.parse(result.replace(/```json\n?|\n?```/g, '')); }
-      catch (e) { parsed = { post: result, hashtags: [], link: '' }; }
+      parsed = extractPostJsonFromAi(result);
     } else {
       const config = getKCSSettings();
       const geminiRaw = cmdAskGemini(
         userPrompt + '\n\n必ずJSON形式のみで返してください（前置きなし）。',
         config, 'Affiliate', SUNAKKUN_SYSTEM_PROMPT
       );
-      const geminiParsed = parseGeminiJson(geminiRaw);
-      parsed = geminiParsed || { post: String(geminiRaw).replace(/```json\n?|\n?```|🤖[^\n]*\n/g,'').trim().substring(0,280), hashtags: [], link: '' };
+      parsed = parseGeminiJson(geminiRaw) || extractPostJsonFromAi(geminiRaw);
+    }
+    // 最終ガード: post本文に残ったJSON波カッコ/AI前置きを完全除去
+    parsed.post = sanitizePostText(parsed.post);
+    // ハッシュタグに # が付いていなければ自動付与
+    if (Array.isArray(parsed.hashtags)) {
+      parsed.hashtags = parsed.hashtags.map(function(tag) {
+        tag = String(tag).trim();
+        return tag.startsWith('#') ? tag : '#' + tag;
+      });
     }
 
     const config = getKCSSettings();
@@ -2941,11 +3284,7 @@ function generateSunakkunPost(data) {
         `\n👉 **承認してXに投稿するには以下を実行してください：**\n` +
         `\`/approve ${postId}\``;
 
-      UrlFetchApp.fetch(affWebhook, {
-        method: 'post', contentType: 'application/json',
-        payload: JSON.stringify({ content: msg.slice(0, 2000) }),
-        muteHttpExceptions: true
-      });
+      sendDiscordWebhook(affWebhook, msg, 'KCS Bot');
     }
 
     const dateTag = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
@@ -3001,6 +3340,13 @@ function autoPostAffiliateAmazon() {
       const xResult = postToX(fullPost, 'sunakun');
       console.log('[autoPostAffiliateAmazon] X投稿結果:', JSON.stringify(xResult));
 
+      // 投稿成功時に商品URL（アフィリエイトリンク）をセルフリプライで即座にぶら下げる
+      if (xResult.ok && xResult.tweetId && parsed.link) {
+        const replyMsg = `紹介した商品はこちらからチェックできます！👇\n${parsed.link}`;
+        const replyRes = replyToX(xResult.tweetId, replyMsg, 'sunakun');
+        console.log('[autoPostAffiliateAmazon] 商品リンク返信結果:', JSON.stringify(replyRes));
+      }
+
       // Discord転送（X成功/失敗どちらでも送信・手動投稿しやすい形式）
       try {
         let webhooks = {};
@@ -3014,11 +3360,7 @@ function autoPostAffiliateAmazon() {
               `\`\`\`\n${fullPost}\n\`\`\`\n` +
               `👆 上のテキストをコピーしてXに貼り付けてください\n` +
               `⚠️ エラー詳細: ${JSON.stringify(xResult.error || 'CredentialsDepleted').slice(0, 100)}`;
-          UrlFetchApp.fetch(amzWebhook, {
-            method: 'post', contentType: 'application/json',
-            payload: JSON.stringify({ content: discordMsg.slice(0, 2000) }),
-            muteHttpExceptions: true
-          });
+          sendDiscordWebhook(amzWebhook, discordMsg, 'KCS Bot');
           console.log('[autoPostAffiliateAmazon] Discord転送完了');
         }
       } catch (e) {
@@ -3077,6 +3419,13 @@ function autoPostAffiliateRakuten() {
       const xResult = postToX(fullPost, 'sunakun');
       console.log('[autoPostAffiliateRakuten] X投稿結果:', JSON.stringify(xResult));
 
+      // 投稿成功時に商品URL（アフィリエイトリンク）をセルフリプライで即座にぶら下げる
+      if (xResult.ok && xResult.tweetId && parsed.link) {
+        const replyMsg = `紹介した商品はこちらからチェックできます！👇\n${parsed.link}`;
+        const replyRes = replyToX(xResult.tweetId, replyMsg, 'sunakun');
+        console.log('[autoPostAffiliateRakuten] 商品リンク返信結果:', JSON.stringify(replyRes));
+      }
+
       // Discord転送（X成功/失敗どちらでも送信・手動投稿しやすい形式）
       try {
         let webhooks = {};
@@ -3089,11 +3438,7 @@ function autoPostAffiliateRakuten() {
             : `🛍 **[すなくん] 楽天投稿キュー** ${xStatus}\n\n` +
               `\`\`\`\n${fullPost}\n\`\`\`\n` +
               `👆 上のテキストをコピーしてXに貼り付けてください`;
-          UrlFetchApp.fetch(rktWebhook, {
-            method: 'post', contentType: 'application/json',
-            payload: JSON.stringify({ content: discordMsg.slice(0, 2000) }),
-            muteHttpExceptions: true
-          });
+          sendDiscordWebhook(rktWebhook, discordMsg, 'KCS Bot');
           console.log('[autoPostAffiliateRakuten] Discord転送完了');
         }
       } catch (e) {
@@ -3510,27 +3855,7 @@ function getAffiliatePosts() {
   }
 }
 
-// YouTube チャンネル統計取得（APIキー未設定時はダミー返却）
-function getYouTubeChannelStats() {
-  const config = getKCSSettings();
-  const apiKey = config.YOUTUBE_API_KEY || '';
-  const channelId = config.YOUTUBE_CHANNEL_ID || '';
-  if (!apiKey || !channelId) return { subscribers: 0, views: 0, error: 'YouTube API未設定' };
-  try {
-    const url = `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelId}&key=${apiKey}`;
-    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    const data = JSON.parse(res.getContentText());
-    const stats = data?.items?.[0]?.statistics || {};
-    return {
-      subscribers: parseInt(stats.subscriberCount || '0'),
-      views: parseInt(stats.viewCount || '0'),
-      videoCount: parseInt(stats.videoCount || '0')
-    };
-  } catch (e) {
-    console.error('[YouTube] 取得エラー:', e.message);
-    return { subscribers: 0, error: e.message };
-  }
-}
+
 
 // YouTube 直近動画一覧取得
 function getRecentVideos(channelId, maxResults) {
@@ -3570,6 +3895,52 @@ function getSalesSummary() {
     console.error('[Pizza] 取得エラー:', e.message);
     return { inStock: 0, total: 0, error: e.message };
   }
+}
+
+/**
+ * X（Twitter）の投稿制限（ハッシュタグ込で140文字、半角換算280単位）を超える場合に自動要約を行う
+ */
+function summarizeTextForX(text) {
+  const config = getKCSSettings();
+  const apiKey = config.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.warn('[X要約] GEMINI_API_KEYが設定されていないため、強制カットします。');
+    return text;
+  }
+
+  const prompt = `以下のテキストはX（Twitter）の投稿制限（ハッシュタグを含めて日本語で140文字、半角換算280文字）を超えています。
+元のメッセージの主旨やトーン＆マナー（語尾やキャラクターの個性など）を維持しつつ、ハッシュタグも含めて全体が絶対に135文字（半角換算270文字）以内に収まるように要約・リライトしてください。
+出力は要約された投稿文のみとしてください。マークダウンや「以下は要約です」などの前置き・解説は一切含めないでください。
+
+【元のテキスト】
+${text}`;
+
+  try {
+    const res = UrlFetchApp.fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'post',
+        contentType: 'application/json',
+        muteHttpExceptions: true,
+        payload: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 200, temperature: 0.3 }
+        })
+      }
+    );
+
+    const data = JSON.parse(res.getContentText());
+    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (reply) {
+      const cleaned = reply.replace(/```[a-z]*\n?|\n?```/g, '').trim();
+      console.log(`[X要約] 元の長さ: ${getTwitterLength(text)} -> 要約後の長さ: ${getTwitterLength(cleaned)}`);
+      return cleaned;
+    }
+  } catch (e) {
+    console.error('[X要約] エラー:', e.message);
+  }
+  
+  return text; // エラー時は元のテキストを返す
 }
 
 // X（Twitter）用の正確なバイト換算文字数（半角1、全角2）の切り出し関数
@@ -3621,64 +3992,117 @@ function getTwitterLength(text) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function postToX(text, account) {
   account = account || 'sunakun';
-  const safeText = sliceTwitterText(text, 280);
-  const tweetUrl = 'https://api.twitter.com/2/tweets';
+  
+  // 140文字（280半角単位）を超える場合は自動要約
+  let safeText = text;
+  if (getTwitterLength(text) > 280) {
+    console.log('[postToX] テキストがXの制限（280単位）を超えているため、自動要約を実行します。元の長さ: ' + getTwitterLength(text));
+    safeText = summarizeTextForX(text);
+  }
+  safeText = sliceTwitterText(safeText, 280);
 
+  const tweetUrl = 'https://api.twitter.com/2/tweets';
+  const config = getKCSSettings();
+
+  // 1. まず OAuth 1.0a (APIキー直接投稿) を試みる
+  let consumerKey, consumerSecret, accessToken, accessSecret;
+  if (account === 'hal') {
+    consumerKey    = config.HAL_X_CONSUMER_KEY;
+    consumerSecret = config.HAL_X_CONSUMER_SECRET;
+    accessToken    = config.HAL_X_ACCESS_TOKEN;
+    accessSecret   = config.HAL_X_ACCESS_SECRET;
+  } else {
+    consumerKey    = config.X_CONSUMER_KEY;
+    consumerSecret = config.X_CONSUMER_SECRET;
+    accessToken    = config.X_ACCESS_TOKEN;
+    accessSecret   = config.X_ACCESS_SECRET;
+  }
+
+  // OAuth 1.0a 用のキーが揃っているか確認
+  if (consumerKey && consumerSecret && accessToken && accessSecret) {
+    console.log('[postToX] OAuth 1.0aでの直接投稿を試みます。 アカウント: ' + account);
+    const directResult = postToXDirect(safeText, { consumerKey, consumerSecret, accessToken, accessSecret }, account);
+    if (directResult && directResult.ok) {
+      console.log('[postToX] OAuth 1.0aでの投稿に成功しました。 アカウント: ' + account + ' tweetId: ' + directResult.tweetId);
+      if (directResult.tweetId) scheduleSelfReply(directResult.tweetId, account);
+      return { ok: true, tweetId: directResult.tweetId, account };
+    }
+    console.warn('[postToX] OAuth 1.0a直接投稿に失敗しました。詳細:', JSON.stringify(directResult));
+  } else {
+    console.warn('[postToX] OAuth 1.0aに必要なAPIキーの一部が未設定です。アカウント: ' + account);
+  }
+
+  // 2. OAuth 1.0a が未設定、または失敗した場合、OAuth 2.0 (ユーザーコンテキスト) を試みる
   try {
     const service = getTwitterOAuthService(account);
+    if (service.hasAccess()) {
+      console.log('[postToX] OAuth 2.0での投稿を試みます。 アカウント: ' + account);
+      const res = UrlFetchApp.fetch(tweetUrl, {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { 'Authorization': 'Bearer ' + service.getAccessToken() },
+        payload: JSON.stringify({ text: safeText }),
+        muteHttpExceptions: true
+      });
 
-    // 未認証の場合は認証URLを返す
-    if (!service.hasAccess()) {
-      const authUrl = service.getAuthorizationUrl();
-      console.warn('[postToX] OAuth2未認証 account:' + account + ' → ' + authUrl);
-      return {
-        ok: false,
-        needsAuth: true,
-        authUrl: authUrl,
-        message: 'OAuth2認証が必要です。authUrlにアクセスしてXにログインしてください。'
-      };
+      const code = res.getResponseCode();
+      let body;
+      try { body = JSON.parse(res.getContentText()); } catch(e) { body = { raw: res.getContentText() }; }
+
+      if (code === 200 || code === 201) {
+        const tweetId = body?.data?.id;
+        console.log('[postToX] OAuth 2.0投稿成功 account:' + account + ' tweetId:', tweetId);
+        if (tweetId) scheduleSelfReply(tweetId, account);
+        return { ok: true, tweetId, account };
+      }
+
+      if (code === 401) {
+        console.warn('[postToX] OAuth2トークン期限切れ、リフレッシュ試行...');
+        service.reset();
+      }
+      console.error('[postToX] OAuth 2.0失敗 code=' + code + ':', res.getContentText());
+    } else {
+      console.warn('[postToX] OAuth 2.0は未認証です。アカウント: ' + account);
     }
-
-    // OAuth 2.0 ベアラートークンで直接POST
-    const res = UrlFetchApp.fetch(tweetUrl, {
-      method: 'post',
-      contentType: 'application/json',
-      headers: { 'Authorization': 'Bearer ' + service.getAccessToken() },
-      payload: JSON.stringify({ text: safeText }),
-      muteHttpExceptions: true
-    });
-
-    const code = res.getResponseCode();
-    let body;
-    try { body = JSON.parse(res.getContentText()); } catch(e) { body = { raw: res.getContentText() }; }
-
-    if (code === 200 || code === 201) {
-      const tweetId = body?.data?.id;
-      console.log('[postToX] OAuth2投稿成功 account:' + account + ' tweetId:', tweetId);
-      // 拡散エンジン: 15分後にセルフリプライ＋相互コメントを自動スケジュール
-      if (tweetId) scheduleSelfReply(tweetId, account);
-      return { ok: true, tweetId, account };
-    }
-
-    // トークン期限切れの場合はリフレッシュして再試行
-    if (code === 401) {
-      console.warn('[postToX] OAuth2トークン期限切れ、リフレッシュ試行...');
-      service.reset();
-      return {
-        ok: false,
-        needsAuth: true,
-        authUrl: service.getAuthorizationUrl(),
-        message: 'トークンが期限切れです。再認証が必要です。'
-      };
-    }
-
-    console.error('[postToX] OAuth2失敗 code=' + code + ':', res.getContentText());
-    return { ok: false, error: body, code };
-
   } catch (e) {
-    console.error('[postToX] 例外 account:' + account + ':', e.message);
-    return { ok: false, error: e.message };
+    console.error('[postToX] OAuth 2.0実行中の例外 account:' + account + ':', e.message);
   }
+
+  // 3. 直接投稿 (1.0a, 2.0) が両方失敗した場合、Make.com Webhook経由のフォールバックを試みる
+  const makeWebhookUrl = config.MAKE_X_WEBHOOK_URL;
+  if (makeWebhookUrl && makeWebhookUrl.startsWith('http')) {
+    console.log('[postToX] Make.com Webhook経由のフォールバック投稿を試みます。 アカウント: ' + account);
+    try {
+      const payload = {
+        text: safeText,
+        account: account,
+        timestamp: new Date().toISOString()
+      };
+      const res = UrlFetchApp.fetch(makeWebhookUrl, {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      });
+      const code = res.getResponseCode();
+      const bodyText = res.getContentText();
+      if (code === 200 || code === 201 || bodyText.toLowerCase().includes('accepted') || bodyText.toLowerCase().includes('success')) {
+        console.log('[postToX] Make.com Webhook経由のフォールバック投稿に成功しました。');
+        return { ok: true, viaWebhook: true, account };
+      }
+      console.error('[postToX] Make.com Webhook送信失敗。ステータスコード: ' + code + '、応答: ' + bodyText);
+    } catch (e) {
+      console.error('[postToX] Make.com Webhook送信中に例外発生:', e.message);
+    }
+  } else {
+    console.warn('[postToX] Make.com Webhook URLが未設定、または無効です。');
+  }
+
+  // 4. すべての投稿手段が失敗した場合、Discord にエラー通知を送り、失敗ステータスを返す
+  const errMessage = 'Xへの自動投稿に失敗しました（OAuth 1.0a, OAuth 2.0, Make.com Webhookのすべてが失敗、または未設定）。';
+  notifyDiscordError('X自動投稿エラー', `アカウント: ${account}\n投稿文: ${safeText.slice(0, 100)}...`, errMessage);
+
+  return { ok: false, error: errMessage };
 }
 
 // エックス（X / 旧Twitter）へ直接新規投稿を行う内部関数
@@ -3695,6 +4119,8 @@ function getTwitterOAuthService(account) {
     clientSecret = config.X_CLIENT_SECRET || config.X_CONSUMER_SECRET;
   }
   
+  // X OAuth 2.0 認証フロー（Confidential Client = Web App タイプ）
+  // ※ client_secret を使う場合は PKCE (code_challenge) を使わない
   return OAuth2.createService('Twitter_' + account)
     .setAuthorizationBaseUrl('https://x.com/i/oauth2/authorize')
     .setTokenUrl('https://api.twitter.com/2/oauth2/token')
@@ -3703,8 +4129,6 @@ function getTwitterOAuthService(account) {
     .setCallbackFunction('authCallback')
     .setPropertyStore(PropertiesService.getUserProperties())
     .setScope('tweet.read tweet.write users.read offline.access')
-    .setParam('response_type', 'code')
-    .setParam('code_challenge_method', 'S256')
     .setParam('state', account);
 }
 
@@ -4122,10 +4546,13 @@ const GMAIL_KEYWORDS = {
  */
 function gmailMonitorTick() {
   const config = getKCSSettings();
-  const props = PropertiesService.getUserProperties();
+  // 死活監視のため ScriptProperties を使用（実行ユーザーが変わってもlastCheckを共有）
+  const props = PropertiesService.getScriptProperties();
   const lastCheck = Number(props.getProperty('GMAIL_LAST_CHECK') || '0');
   const now = Date.now();
   const since = new Date(lastCheck || now - 60 * 60 * 1000); // デフォルト1時間前
+  // 最終実行ハートビートを記録（kcsHealthMonitorがこれを見て死活判定）
+  props.setProperty('GMAIL_LAST_RUN_TS', String(now));
 
   const findings = [];
 
@@ -4965,6 +5392,84 @@ function checkAndCreateDeveloperChannel(config, token, channels) {
  */
 function replyToX(tweetId, text, account) {
   account = account || 'sunakun';
+
+  // 返信も140文字（280半角単位）を超える場合は自動要約
+  let safeText = text;
+  if (getTwitterLength(text) > 280) {
+    console.log('[replyToX] 返信テキストがXの制限（280単位）を超えているため、自動要約を実行します。元の長さ: ' + getTwitterLength(text));
+    safeText = summarizeTextForX(text);
+  }
+  safeText = sliceTwitterText(safeText, 275); // 返信なので275文字にスライス
+
+  const config = getKCSSettings();
+
+  // 1. まず OAuth 1.0a (APIキー直接返信) を試みる
+  let consumerKey, consumerSecret, accessToken, accessSecret;
+  if (account === 'hal') {
+    consumerKey    = config.HAL_X_CONSUMER_KEY;
+    consumerSecret = config.HAL_X_CONSUMER_SECRET;
+    accessToken    = config.HAL_X_ACCESS_TOKEN;
+    accessSecret   = config.HAL_X_ACCESS_SECRET;
+  } else {
+    consumerKey    = config.X_CONSUMER_KEY;
+    consumerSecret = config.X_CONSUMER_SECRET;
+    accessToken    = config.X_ACCESS_TOKEN;
+    accessSecret   = config.X_ACCESS_SECRET;
+  }
+
+  if (consumerKey && consumerSecret && accessToken && accessSecret) {
+    try {
+      const url = 'https://api.twitter.com/2/tweets';
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const nonce = Utilities.getUuid().replace(/-/g, '');
+
+      const oauthParams = {
+        oauth_consumer_key: consumerKey,
+        oauth_nonce: nonce,
+        oauth_signature_method: 'HMAC-SHA1',
+        oauth_timestamp: timestamp,
+        oauth_token: accessToken,
+        oauth_version: '1.0'
+      };
+
+      const paramStr = Object.keys(oauthParams).sort()
+        .map(k => `${encodeRFC3986(k)}=${encodeRFC3986(oauthParams[k])}`)
+        .join('&');
+      const baseStr = `POST&${encodeRFC3986(url)}&${encodeRFC3986(paramStr)}`;
+      const signingKey = `${encodeRFC3986(consumerSecret)}&${encodeRFC3986(accessSecret)}`;
+      const signature = Utilities.base64Encode(
+        Utilities.computeHmacSignature(Utilities.MacAlgorithm.HMAC_SHA_1, baseStr, signingKey)
+      );
+      oauthParams['oauth_signature'] = signature;
+
+      const authHeader = 'OAuth ' + Object.keys(oauthParams).sort()
+        .map(k => `${encodeRFC3986(k)}="${encodeRFC3986(oauthParams[k])}"`)
+        .join(', ');
+
+      const res = UrlFetchApp.fetch(url, {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { 'Authorization': authHeader },
+        payload: JSON.stringify({
+          text: safeText,
+          reply: { in_reply_to_tweet_id: tweetId }
+        }),
+        muteHttpExceptions: true
+      });
+
+      const code = res.getResponseCode();
+      const body = JSON.parse(res.getContentText());
+      if (code === 201 || code === 200) {
+        console.log('[replyToX] OAuth1.0a 返信成功:', body?.data?.id, '→', tweetId);
+        return { ok: true, replyId: body?.data?.id };
+      }
+      console.warn('[replyToX] OAuth1.0a 返信失敗 code=' + code + ':', res.getContentText());
+    } catch (e) {
+      console.error('[replyToX] OAuth1.0a 例外:', e.message);
+    }
+  }
+
+  // 2. OAuth 1.0a が未設定、または失敗した場合、OAuth 2.0 を試みる
   try {
     const service = getTwitterOAuthService(account);
     if (!service.hasAccess()) {
@@ -4972,7 +5477,6 @@ function replyToX(tweetId, text, account) {
     }
 
     const url = 'https://api.twitter.com/2/tweets';
-    const safeText = sliceTwitterText(text, 275);
     
     const res = UrlFetchApp.fetch(url, {
       method: 'post',
@@ -4988,6 +5492,7 @@ function replyToX(tweetId, text, account) {
     const code = res.getResponseCode();
     const body = JSON.parse(res.getContentText());
     if (code === 201 || code === 200) {
+      console.log('[replyToX] OAuth2 返信成功:', body?.data?.id, '→', tweetId);
       return { ok: true, replyId: body?.data?.id };
     }
     return { ok: false, error: body };
@@ -6166,7 +6671,7 @@ function saveToObsidian({ title, content, subfolder }) {
 // 認証キーが正しく読み込まれているか確認するデバッグ関数
 function debugXKeys() {
   const config = getKCSSettings();
-  
+
   const halKeys = {
     OAuth1: {
       consumerKey: config.HAL_X_CONSUMER_KEY ? '設定済' : '未設定',
@@ -6195,7 +6700,7 @@ function debugXKeys() {
 
   console.log('=== HAL アカウント キー状況 ===');
   console.log(JSON.stringify(halKeys, null, 2));
-  
+
   console.log('=== すなくん アカウント キー状況 ===');
   console.log(JSON.stringify(sunakunKeys, null, 2));
 
@@ -6701,9 +7206,6 @@ function reportXPostResult(params) {
   }, 'reportXPostResult');
 }
 
-/**
- * 収益レポートの自動トリガーをセットアップ（毎日21時）
- */
 function setupRevenueReportTrigger() {
   const existing = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
   if (!existing.includes('generateRevenueReport')) {
@@ -6711,3 +7213,1632 @@ function setupRevenueReportTrigger() {
     console.log('[収益化] 収益レポートトリガー設定完了 (毎日21時)');
   }
 }
+
+// ===================================================
+// 🔮 西洋占星術 診断＆貸出・請求管理バックエンド
+// ===================================================
+
+/**
+ * 占い師ごとの診断実績・売上を集計
+ */
+function getAstrologySales(tellerId, month) {
+  return withErrorHandling(() => {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const salesSheet = ss.getSheetByName('占星術_販売履歴');
+    const masterSheet = ss.getSheetByName('占星術_占い師マスター');
+    if (!salesSheet || !masterSheet) return { ok: false, error: 'シートが見つかりません。' };
+
+    const targetMonth = month || Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM');
+    const masters = masterSheet.getDataRange().getValues().slice(1);
+    const sales = salesSheet.getDataRange().getValues().slice(1);
+
+    const activeTellers = [];
+    for (const m of masters) {
+      if (tellerId && m[0] !== tellerId) continue;
+      
+      const tId = m[0];
+      const tName = m[1];
+      const baseFee = Number(m[4] || 0);
+      const commissionRate = Number(m[5] || 0);
+      const status = m[6];
+
+      // 売上と件数の集計
+      let totalSales = 0;
+      let totalCount = 0;
+      const plans = { light: { count: 0, sales: 0 }, standard: { count: 0, sales: 0 }, premium: { count: 0, sales: 0 } };
+      const recentSales = [];
+
+      for (const s of sales) {
+        const timestamp = s[0];
+        const sTellerId = s[2];
+        const customerName = s[3];
+        const plan = s[4];
+        const amount = Number(s[5] || 0);
+        const sStatus = s[8];
+
+        if (sTellerId !== tId || sStatus !== '発行完了') continue;
+
+        // 月判定
+        const sMonth = Utilities.formatDate(new Date(timestamp), 'Asia/Tokyo', 'yyyy-MM');
+        if (sMonth !== targetMonth) continue;
+
+        totalSales += amount;
+        totalCount++;
+
+        const pKey = plan.includes('ライト') ? 'light' : plan.includes('スタンダード') ? 'standard' : 'premium';
+        plans[pKey].count++;
+        plans[pKey].sales += amount;
+
+        if (recentSales.length < 10) {
+          recentSales.push({
+            timestamp: Utilities.formatDate(new Date(timestamp), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm'),
+            nickname: customerName,
+            plan: plan,
+            amount: amount
+          });
+        }
+      }
+
+      // KCSへの請求額計算 (月額固定費 + 売上の手数料率%)
+      const billingAmount = baseFee + Math.round(totalSales * (commissionRate / 100));
+
+      activeTellers.push({
+        tellerId: tId,
+        tellerName: tName,
+        status: status,
+        totalSales: totalSales,
+        totalCount: totalCount,
+        plans: plans,
+        billingAmount: billingAmount,
+        baseFee: baseFee,
+        commissionRate: commissionRate,
+        recentSales: recentSales
+      });
+    }
+
+    if (tellerId) {
+      return { ok: true, status: 'ok', data: activeTellers[0] || null };
+    }
+    return { ok: true, status: 'ok', data: activeTellers };
+  }, 'getAstrologySales');
+}
+
+/**
+ * 占い師ログイン認証
+ */
+function tellerLogin(username, password) {
+  return withErrorHandling(() => {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('占星術_占い師マスター');
+    if (!sheet) return { ok: false, error: 'マスターシートがありません。' };
+    
+    const rows = sheet.getDataRange().getValues().slice(1);
+    for (const r of rows) {
+      const tellerId = r[0];
+      const tellerName = r[1];
+      const email = r[2];
+      const status = r[6];
+
+      if (tellerId === username || email === username) {
+        if (status !== '有効') {
+          return { ok: false, error: 'このアカウントは現在停止されています。' };
+        }
+        
+        // パスワード照合 (PropertiesServiceに [tellerId]_tellerPass で保存)
+        const props = PropertiesService.getScriptProperties();
+        let savedPass = props.getProperty(`${tellerId}_tellerPass`);
+        if (!savedPass) {
+          // パスワード未設定時は、初期値として tellerId を自動登録
+          props.setProperty(`${tellerId}_tellerPass`, tellerId);
+          savedPass = tellerId;
+        }
+
+        if (savedPass === password) {
+          return { ok: true, tellerId: tellerId, tellerName: tellerName, role: 'teller' };
+        } else {
+          return { ok: false, error: 'パスワードが違います。' };
+        }
+      }
+    }
+    return { ok: false, error: 'ユーザーが見つかりません。' };
+  }, 'tellerLogin');
+}
+
+/**
+ * 占い師の新規登録とサブスク決済URLの発行
+ */
+function registerTeller(body) {
+  return withErrorHandling(() => {
+    const { tellerId, tellerName, email, password } = body;
+    if (!tellerId || !tellerName || !email || !password) {
+      return { ok: false, error: '必須項目が不足しています。' };
+    }
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('占星術_占い師マスター');
+    if (!sheet) return { ok: false, error: 'マスターシートがありません。' };
+    
+    // IDとEmailの重複チェック
+    const rows = sheet.getDataRange().getValues().slice(1);
+    for (const r of rows) {
+      if (r[0] === tellerId) {
+        return { ok: false, error: 'この占い師IDは既に登録されています。' };
+      }
+      if (r[2] === email) {
+        return { ok: false, error: 'このメールアドレスは既に登録されています。' };
+      }
+    }
+
+    // デフォルト値
+    const baseFee = 0;
+    const commissionRate = 30; // 手数料30%
+    const status = '未契約'; // 決済完了時に「有効」になる
+    const accessToken = '';
+    const consumerKey = '';
+    const consumerSecret = '';
+    const xAccessToken = '';
+    const xAccessSecret = '';
+
+    // マスターシートへ追加
+    sheet.appendRow([
+      tellerId, tellerName, email, '', baseFee, commissionRate, status,
+      accessToken, consumerKey, consumerSecret, xAccessToken, xAccessSecret
+    ]);
+
+    // パスワードをプロパティに保存
+    const props = PropertiesService.getScriptProperties();
+    props.setProperty(`${tellerId}_tellerPass`, password);
+
+    // StripeのサブスクリプションCheckoutを作成
+    const config = getKCSSettings();
+    const stripeKey = config.STRIPE_API_KEY || '';
+    if (!stripeKey) return { ok: false, error: 'Stripe APIキーが設定されていません。' };
+
+    const isLocal = true;
+    const baseUrl = isLocal ? 'http://localhost:5173' : 'https://kcs-astrology.web.app';
+
+    const url = 'https://api.stripe.com/v1/checkout/sessions';
+    const payload = {
+      'payment_method_types[0]': 'card',
+      'line_items[0][price_data][currency]': 'jpy',
+      'line_items[0][price_data][product_data][name]': '占い師システム利用料（月額サブスクリプション）',
+      'line_items[0][price_data][unit_amount]': '55000',
+      'line_items[0][price_data][recurring][interval]': 'month',
+      'line_items[0][quantity]': '1',
+      'mode': 'subscription',
+      'allow_promotion_codes': 'true',
+      'success_url': `${baseUrl}/teller/login?subscribed=true`,
+      'cancel_url': `${baseUrl}/teller/register`,
+      'customer_email': email,
+      'metadata[tellerId]': tellerId,
+      'metadata[tellerName]': tellerName,
+      'metadata[email]': email
+    };
+
+    const options = {
+      method: 'post',
+      headers: {
+        'Authorization': 'Bearer ' + stripeKey
+      },
+      payload: payload,
+      muteHttpExceptions: true
+    };
+
+    const res = UrlFetchApp.fetch(url, options);
+    const resData = JSON.parse(res.getContentText());
+
+    if (resData.url) {
+      return { ok: true, checkoutUrl: resData.url };
+    } else {
+      return { ok: false, error: 'Stripe決済URLの生成に失敗しました: ' + (resData.error ? resData.error.message : '') };
+    }
+  }, 'registerTeller');
+}
+
+/**
+ * LINE公式アカウント Webhook 処理 (本名ヒアリングチャットボット)
+ */
+function handleLineWebhook(body, rawContents, queryTellerId) {
+  return withErrorHandling(() => {
+    const payload = JSON.parse(rawContents);
+    const events = payload.events || [];
+    if (events.length === 0) return { ok: true, message: 'No events' };
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const masterSheet = ss.getSheetByName('占星術_占い師マスター');
+    const customerSheet = ss.getSheetByName('占星術_顧客リスト');
+    if (!masterSheet || !customerSheet) return { ok: false, error: '占星術シートが見つかりません。' };
+
+    const tellerId = queryTellerId || 'teller_01';
+    
+    // 占い師マスターからアクセストークンを取得
+    const masters = masterSheet.getDataRange().getValues().slice(1);
+    let accessToken = '';
+    let tellerName = '';
+    for (const m of masters) {
+      if (m[0] === tellerId) {
+        accessToken = m[7];
+        tellerName = m[1];
+        break;
+      }
+    }
+    if (!accessToken) return { ok: false, error: 'LINEアクセストークンが設定されていません。' };
+
+    for (const event of events) {
+      const userId = event.source.userId;
+      const replyToken = event.replyToken;
+
+      // 1. 友だち追加 (follow) イベント
+      if (event.type === 'follow') {
+        const profile = getUserLineProfile(accessToken, userId);
+        const displayName = profile.displayName || '不明なユーザー';
+
+        // 顧客リストに登録
+        addOrUpdateCustomer(customerSheet, userId, displayName, '', '未登録');
+
+        // 本名確認のメッセージを送信
+        sendLineMessage(accessToken, replyToken, [
+          {
+            type: 'text',
+            text: `🔮 友だち追加ありがとうございます！\n\n${tellerName}の西洋占星術鑑定書を作成するために、まずは鑑定書に印字する【あなたのお名前（本名）】を、このチャットに平仮名または漢字でご返信ください。`
+          }
+        ]);
+      }
+
+      // 2. メッセージ受信 (message) イベント
+      else if (event.type === 'message' && event.message.type === 'text') {
+        const text = event.message.text.trim();
+        const customer = getCustomer(customerSheet, userId);
+
+        if (!customer) {
+          // 未登録の場合は新規登録して名前をヒアリング
+          const profile = getUserLineProfile(accessToken, userId);
+          addOrUpdateCustomer(customerSheet, userId, profile.displayName || '不明なユーザー', '', '未登録');
+          sendLineMessage(accessToken, replyToken, [
+            {
+              type: 'text',
+              text: `🔮 鑑定書を作成するために、まずはあなたのお名前（本名）を教えてください。\nこのチャットに【お名前（本名）】をご返信ください。`
+            }
+          ]);
+        } else if (customer.status === '未登録') {
+          // 送信されたテキストを本名として登録
+          addOrUpdateCustomer(customerSheet, userId, customer.displayName, text, '名前登録完了');
+
+          sendLineMessage(accessToken, replyToken, [
+            {
+              type: 'text',
+              text: `✅ お名前「${text} 様」を登録いたしました。\n\n鑑定の準備が整いましたら、先生より鑑定書がこちらのラインに届きますので、今しばらくお待ちください。`
+            }
+          ]);
+
+          // Discordの #x-西洋占星術 へ通知
+          sendDiscordAstrologyNotification(`👤 **顧客名前登録完了**\n・占い師: ${tellerName}\n・ライン名: ${customer.displayName}\n・本名: ${text} 様\n・ステータス: 鑑定書発行待ち`);
+        }
+      }
+    }
+
+    return { ok: true, processed: events.length };
+  }, 'handleLineWebhook');
+}
+
+/**
+ * 占い申込フォームの送信処理（Stripe決済URL発行）
+ */
+function submitAstrologyDiagnose(body) {
+  return withErrorHandling(() => {
+    const tellerId = body.tellerId || '';
+    const plan = body.plan || 'standard';
+    const email = body.email || '';
+    const name = body.name || '';
+    
+    // プラン名と金額の設定
+    let price = 5000;
+    let planName = 'スタンダードプラン';
+    if (plan === 'light') { price = 3000; planName = 'ライトプラン'; }
+    else if (plan === 'romance') { price = 8000; planName = '恋愛・相性プラン'; }
+    else if (plan === 'premium') { price = 10000; planName = 'プレミアムプラン'; }
+
+    const config = getKCSSettings();
+    const stripeKey = config.STRIPE_API_KEY || '';
+    if (!stripeKey) return { status: 'error', message: 'Stripe APIキーが設定されていません。（テストモードの場合はテストキーを設定してください）' };
+    
+    const props = PropertiesService.getScriptProperties();
+    props.setProperty(`pending_birth_${email}`, JSON.stringify(body));
+
+    const isLocal = true; // 開発用
+    const baseUrl = isLocal ? 'http://localhost:5173' : 'https://kcs-astrology.web.app';
+
+    const url = 'https://api.stripe.com/v1/checkout/sessions';
+    const payload = {
+      'payment_method_types[0]': 'card',
+      'line_items[0][price_data][currency]': 'jpy',
+      'line_items[0][price_data][product_data][name]': `西洋占星術鑑定 (${planName}) - ${name}様`,
+      'line_items[0][price_data][unit_amount]': price.toString(),
+      'line_items[0][quantity]': '1',
+      'mode': 'payment',
+      'success_url': `${baseUrl}/thankyou?session_id={CHECKOUT_SESSION_ID}&teller=${tellerId}`,
+      'cancel_url': `${baseUrl}/?teller=${tellerId}`,
+      'customer_email': email,
+      'metadata[tellerId]': tellerId,
+      'metadata[planName]': planName,
+      'metadata[customerName]': name,
+      'metadata[email]': email
+    };
+
+    const options = {
+      method: 'post',
+      headers: {
+        'Authorization': 'Bearer ' + stripeKey
+      },
+      payload: payload,
+      muteHttpExceptions: true
+    };
+
+    const res = UrlFetchApp.fetch(url, options);
+    const resData = JSON.parse(res.getContentText());
+
+    if (resData.url) {
+      return { status: 'success', checkoutUrl: resData.url };
+    } else {
+      return { status: 'error', message: 'Stripe決済URLの生成に失敗しました: ' + (resData.error ? resData.error.message : '') };
+    }
+  }, 'submitAstrologyDiagnose');
+}
+
+/**
+ * 顧客鑑定書の発行、PDF生成、LINE送信、Discord通知
+ */
+function createAstrologyReport(body) {
+  return withErrorHandling(() => {
+    const tellerId = body.tellerId || '';
+    const lineUserId = body.lineUserId || '';
+    const customerName = body.customerName || '';
+    const birthDate = body.birthDate || '';
+    const birthTime = body.birthTime || '';
+    const birthPlace = body.birthPlace || '';
+    const planName = body.planName || 'スタンダードプラン';
+
+    // パートナー情報の取得（恋愛・相性プラン用）
+    const partnerName = body.partnerName || '';
+    const partnerBirthdate = body.partnerBirthdate || '';
+    const partnerBirthtime = body.partnerBirthtime || '';
+    const partnerBirthplace = body.partnerBirthplace || '';
+
+    if (!tellerId || !customerName || !birthDate) {
+      return { ok: false, error: '必須パラメータが不足しています。' };
+    }
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const masterSheet = ss.getSheetByName('占星術_占い師マスター');
+    const salesSheet = ss.getSheetByName('占星術_販売履歴');
+    if (!masterSheet || !salesSheet) return { ok: false, error: '占星術シートが見つかりません。' };
+
+    // 占い師情報の取得
+    const masters = masterSheet.getDataRange().getValues().slice(1);
+    let tellerName = '';
+    let accessToken = '';
+    for (const m of masters) {
+      if (m[0] === tellerId) {
+        tellerName = m[1];
+        accessToken = m[7];
+        break;
+      }
+    }
+
+    // 太陽星座の判定
+    const sunSign = getSunSign(birthDate);
+
+    // プランに応じた価格設定
+    let price = 5000;
+    if (planName.includes('ライト')) price = 3000;
+    if (planName.includes('恋愛') || planName.includes('相性')) price = 8000;
+    if (planName.includes('プレミアム')) price = 10000;
+
+    // Gemini APIによる解説テキスト生成
+    const config = getKCSSettings();
+    const apiKey = config.GEMINI_API_KEY || '';
+    if (!apiKey) return { ok: false, error: 'GEMINI_API_KEY が設定されていません。' };
+
+    let partnerPrompt = '';
+    if (planName.includes('恋愛') || planName.includes('相性')) {
+      partnerPrompt = `
+【お相手の出生データ】
+・お名前: ${partnerName} 様
+・生年月日: ${partnerBirthdate}
+・出生時刻: ${partnerBirthtime === 'unknown' ? '不明' : partnerBirthtime}
+・出生地: ${partnerBirthplace}
+
+特別指示：今回は「恋愛・相性プラン」です。お客様個人の鑑定結果に加えて、上記の「お相手の出生データ」に基づき、二人の相性（シナストリー）分析、恋愛傾向、惹かれ合うポイント、そして関係を長続きさせるためのアドバイスを充実させて出力してください。
+`;
+    }
+
+    const prompt = `あなたは高名な西洋占星術師の「${tellerName}」です。
+以下の出生データを持つ顧客「${customerName} 様」のために、プロフェッショナルかつ温かみのある鑑定書を作成してください。
+
+【お客様の出生データ】
+・お名前: ${customerName} 様
+・生年月日: ${birthDate}
+・出生時刻: ${birthTime === 'unknown' ? '不明' : birthTime}
+・出生地: ${birthPlace}
+・太陽星座: ${sunSign}
+${partnerPrompt}
+
+【選択プラン】: ${planName}
+プランごとの詳細度・文字数基準：
+1. ライトプラン（簡易診断）: 約600文字。社会的自分（太陽星座）と内面（月星座）の基本性格、および今日の運勢。
+2. スタンダードプラン（詳細診断）: 約1,500文字。思考（水星）、魅力（金星）、行動（火星）の星座解説、ハウスと主要アスペクト、今年の年間運勢。
+3. 恋愛・相性プラン: 約2,000文字。スタンダードの項目に加え、お二人の相性分析、恋愛傾向、長続きの秘訣を含めてください。
+4. プレミアムプラン（特別診断）: 約3,000文字。10天体すべて、ハウス、アスペクト詳細分析、アセンダント、1年の未来予測、使命の深層診断。
+
+出力形式はマークダウン形式とし、ロボット的な敬語は避け、「〜ですね」「〜ですよ」という占い師としての品格ある優しい口調を徹底してください。`;
+
+    const geminiResult = callGeminiAstrology(prompt, apiKey);
+    if (!geminiResult) return { ok: false, error: 'Geminiによる診断文の生成に失敗しました。' };
+
+    // HTMLからPDF生成
+    const htmlContent = createHtmlReportTemplate(tellerName, customerName, birthDate, birthTime, birthPlace, sunSign, planName, geminiResult);
+    const tempFile = DriveApp.createFile('temp_report_' + Date.now() + '.html', htmlContent, 'text/html');
+    const pdfBlob = tempFile.getAs('application/pdf').setName(`鑑定書_${tellerName}_${customerName}.pdf`);
+    
+    // ドライブに保存
+    const folderId = config.DRIVE_PROCESSED_IMAGE_FOLDER_ID || '';
+    let folder = DriveApp.getRootFolder();
+    if (folderId) {
+      try { folder = DriveApp.getFolderById(folderId); } catch(e) {}
+    }
+    const pdfFile = folder.createFile(pdfBlob);
+    pdfFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    const pdfUrl = pdfFile.getDownloadUrl();
+
+    // 一時ファイル削除
+    tempFile.setTrashed(true);
+
+    // 販売履歴に記録
+    const transactionId = 'TXN_' + Date.now();
+    salesSheet.appendRow([
+      new Date(),
+      transactionId,
+      tellerId,
+      customerName,
+      planName,
+      price,
+      lineUserId,
+      pdfUrl,
+      '発行完了'
+    ]);
+
+    // LINEにPDFダウンロードリンクを送信
+    if (accessToken) {
+      sendLineMessage(accessToken, lineUserId, [
+        {
+          type: 'text',
+          text: `🔮 ${customerName} 様、お待たせいたしました！\n${tellerName}による占星術鑑定書が完成いたしました。\n\n以下のリンクから鑑定書（PDF）をダウンロードしてご覧いただけます。`
+        },
+        {
+          type: 'template',
+          altText: '占星術鑑定書はこちらからダウンロード',
+          template: {
+            type: 'buttons',
+            title: `${planName}`,
+            text: `${customerName} 様専用の鑑定書`,
+            actions: [
+              {
+                type: 'uri',
+                label: '鑑定書PDFを開く',
+                uri: pdfUrl
+              }
+            ]
+          }
+        }
+      ]);
+    }
+
+    // Discordへ通知
+    sendDiscordAstrologyNotification(
+      `🔮 **【鑑定書 送信完了】**\n` +
+      `・担当占い師: ${tellerName} (ID: ${tellerId})\n` +
+      `・顧客名: ${customerName} 様\n` +
+      `・プラン: ${planName}\n` +
+      `・価格: ¥${price.toLocaleString()}\n` +
+      `・鑑定書PDF: [Googleドライブでプレビュー](${pdfUrl})`
+    );
+
+    return { ok: true, status: 'ok', transactionId: transactionId, pdfUrl: pdfUrl };
+  }, 'createAstrologyReport');
+}
+
+/**
+ * Stripe Webhookの受信・処理
+ */
+function handleStripeWebhook(body, rawContents) {
+  return withErrorHandling(() => {
+    let payload;
+    try {
+      payload = JSON.parse(rawContents);
+    } catch(e) {
+      return { ok: false, error: 'JSONパースエラー' };
+    }
+
+    const eventType = payload.type;
+    const eventData = payload.data.object;
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const masterSheet = ss.getSheetByName('占星術_占い師マスター');
+    const salesSheet = ss.getSheetByName('占星術_販売履歴');
+
+    // 1. サブスク決済成功、または都度決済完了
+    if (eventType === 'checkout.session.completed') {
+      const metadata = eventData.metadata || {};
+      const subscriptionId = eventData.subscription || '';
+      const mode = eventData.mode; // 'payment' or 'subscription'
+
+      if (mode === 'subscription' && subscriptionId) {
+        // 占い師のサブスクリプション支払い完了
+        const tellerId = metadata.tellerId || '';
+        const email = eventData.customer_details?.email || '';
+
+        if (tellerId && masterSheet) {
+          updateTellerStatus(masterSheet, tellerId, '有効', subscriptionId);
+          const tellerName = getTellerName(masterSheet, tellerId);
+          sendDiscordAstrologyNotification(
+            `🎉 **【サブスク契約 支払い完了】**\n` +
+            `・契約占い師: ${tellerName}先生 (ID: ${tellerId})\n` +
+            `・メール: ${email}\n` +
+            `・契約ステータス: 🟢 有効（システム稼働開始）`
+          );
+        }
+      } else if (mode === 'payment') {
+        // 一般顧客の都度決済完了（都度販売モードの場合）
+        const tellerId = metadata.tellerId || '';
+        const lineUserId = metadata.lineUserId || '';
+        const customerName = metadata.customerName || '';
+        const planName = metadata.planName || '';
+        const transactionId = eventData.id || '';
+
+        // 鑑定書の自動発行処理をトリガー
+        if (tellerId && lineUserId) {
+          // すでに入力された出生データをPropertiesService等のキューから復元し、createAstrologyReportを実行
+          const props = PropertiesService.getScriptProperties();
+          // Stripe Webhook時にはlineUserIdではなくemailで照合する
+          const email = metadata.email || '';
+          const birthDataJson = props.getProperty(`pending_birth_${email}`);
+          if (birthDataJson) {
+            const b = JSON.parse(birthDataJson);
+            createAstrologyReport({
+              tellerId: tellerId,
+              lineUserId: lineUserId,
+              customerName: customerName,
+              birthDate: b.birthdate,
+              birthTime: b.birthtime,
+              birthPlace: b.birthplace,
+              planName: planName,
+              partnerName: b.partnerName,
+              partnerBirthdate: b.partnerBirthdate,
+              partnerBirthtime: b.partnerBirthtime,
+              partnerBirthplace: b.partnerBirthplace
+            });
+            props.deleteProperty(`pending_birth_${email}`);
+          }
+          
+          sendDiscordAstrologyNotification(
+            `💳 **【都度決済 完了】**\n` +
+            `・占い師: ${tellerId}\n` +
+            `・顧客名: ${customerName} 様\n` +
+            `・プラン: ${planName}\n` +
+            `・トランザクションID: ${transactionId}`
+          );
+        }
+      }
+    }
+
+    // 2. サブスクリプション失効・解約 (未払い停止)
+    else if (eventType === 'customer.subscription.deleted') {
+      const subscriptionId = eventData.id;
+      if (subscriptionId && masterSheet) {
+        const tellerInfo = getTellerBySubscriptionId(masterSheet, subscriptionId);
+        if (tellerInfo) {
+          updateTellerStatus(masterSheet, tellerInfo.tellerId, '無効', subscriptionId);
+          sendDiscordAstrologyNotification(
+            `🚨 **【サブスク契約 未払い停止】**\n` +
+            `・占い師: ${tellerInfo.tellerName}先生 (ID: ${tellerInfo.tellerId})\n` +
+            `・契約ステータス: 🔴 無効（鑑定システムの稼働を一時停止しました）`
+          );
+        }
+      }
+    }
+
+    return { ok: true, status: 'ok', eventType: eventType };
+  }, 'handleStripeWebhook');
+}
+
+/**
+ * 占い師のX自動投稿案を生成
+ */
+function generateAstrologyXPost(body) {
+  return withErrorHandling(() => {
+    const tellerId = body.tellerId || '';
+    if (!tellerId) return { ok: false, error: 'tellerId は必須です。' };
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const masterSheet = ss.getSheetByName('占星術_占い師マスター');
+    const xSheet = ss.getSheetByName('占星術_X投稿管理');
+    if (!masterSheet || !xSheet) return { ok: false, error: '占星術シートが見つかりません。' };
+
+    const masters = masterSheet.getDataRange().getValues().slice(1);
+    let tellerName = '';
+    for (const m of masters) {
+      if (m[0] === tellerId) {
+        tellerName = m[1];
+        break;
+      }
+    }
+
+    const config = getKCSSettings();
+    const apiKey = config.GEMINI_API_KEY || '';
+
+    // 本日の占星術的アスペクトなどをテーマにしたプロンプト
+    const prompt = `あなたはSNSで絶大な人気を誇る西洋占星術師の「${tellerName}」です。
+エックス（X）でフォロワーを増やし、公式ラインへ集客するための有益なツイート（占いに関する豆知識や今日の星回りのアドバイス）を1つ生成してください。
+
+【制約条件】
+・文字数は日本語で120〜140文字程度。
+・外部リンク（URL）は本文に絶対に含めないでください（アルゴリズム対策）。
+・投稿の最後に必ず「この投稿に【開運】とリプライした人限定で、今月の詳細な開運PDFを個別DMで送ります！」というCTAを挿入してください。
+・口調は上品で温かみがありつつ、どこか神秘的でプロらしい「〜ですね」「〜ですよ」という表現にしてください。
+・ハッシュタグは最大1つまでにしてください。`;
+
+    const generatedText = callGeminiAstrology(prompt, apiKey);
+    if (!generatedText) return { ok: false, error: 'ツイート案の生成に失敗しました。' };
+
+    // X投稿管理シートに予約保存
+    const scheduledTime = new Date();
+    scheduledTime.setMinutes(scheduledTime.getMinutes() + 5); // 5分後に設定
+
+    xSheet.appendRow([
+      new Date(),
+      tellerId,
+      generatedText,
+      '予約',
+      scheduledTime,
+      ''
+    ]);
+
+    return { ok: true, status: 'ok', postContent: generatedText, scheduledTime: scheduledTime };
+  }, 'generateAstrologyXPost');
+}
+
+/**
+ * 予約されたX投稿を実行
+ */
+function postAstrologyToX(body) {
+  return withErrorHandling(() => {
+    const tellerId = body.tellerId || '';
+    if (!tellerId) return { ok: false, error: 'tellerId は必須です。' };
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const masterSheet = ss.getSheetByName('占星術_占い師マスター');
+    const xSheet = ss.getSheetByName('占星術_X投稿管理');
+    if (!masterSheet || !xSheet) return { ok: false, error: '占星術シートが見つかりません。' };
+
+    const masters = masterSheet.getDataRange().getValues().slice(1);
+    let keys = null;
+    for (const m of masters) {
+      if (m[0] === tellerId) {
+        keys = {
+          consumerKey: m[8],
+          consumerSecret: m[9],
+          accessToken: m[10],
+          accessSecret: m[11]
+        };
+        break;
+      }
+    }
+    if (!keys || !keys.consumerKey) {
+      return { ok: false, error: '該当占い師のX APIキーが未設定です。' };
+    }
+
+    const rows = xSheet.getDataRange().getValues();
+    const now = new Date();
+    let postedCount = 0;
+
+    for (let i = 1; i < rows.length; i++) {
+      const rowTellerId = rows[i][1];
+      const text = rows[i][2];
+      const status = rows[i][3];
+      const schedTime = new Date(rows[i][4]);
+
+      if (rowTellerId === tellerId && status === '予約' && schedTime <= now) {
+        // 投稿の実行
+        const result = postToXDirect(text, keys, tellerId);
+        if (result && result.ok) {
+          xSheet.getRange(i + 1, 4).setValue('投稿済み');
+          xSheet.getRange(i + 1, 6).setValue(result.id || '');
+          postedCount++;
+        } else {
+          xSheet.getRange(i + 1, 4).setValue('失敗');
+        }
+      }
+    }
+
+    return { ok: true, status: 'ok', postedCount: postedCount };
+  }, 'postAstrologyToX');
+}
+
+/**
+ * 占い師宛ての月次「システム利用料明細・請求書」PDFの自動生成
+ */
+function generateInvoicePdf(tellerId, month) {
+  return withErrorHandling(() => {
+    if (!tellerId) return { ok: false, error: 'tellerId は必須です。' };
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const masterSheet = ss.getSheetByName('占星術_占い師マスター');
+    if (!masterSheet) return { ok: false, error: 'マスターシートがありません。' };
+
+    const targetMonth = month || Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM');
+    const salesReport = getAstrologySales(tellerId, targetMonth);
+    if (!salesReport || !salesReport.data) {
+      return { ok: false, error: '該当月の売上データの集計に失敗しました。' };
+    }
+
+    const tData = salesReport.data;
+    const config = getKCSSettings();
+
+    // KCSの送付元会社情報
+    const compName = config.INVOICE_COMPANY_NAME || 'KCS合同会社';
+    const compAddr = config.INVOICE_ADDRESS || '東京都千代田区麹町';
+    const compBank = config.INVOICE_BANK_INFO || '三菱UFJ銀行 麹町支店 普通 1234567';
+
+    // 請求書HTMLテンプレートの生成
+    const htmlInvoice = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>システム利用料御請求書</title>
+  <style>
+    body { font-family: sans-serif; color: #333; padding: 20px; line-height: 1.6; }
+    .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
+    .title { font-size: 24px; font-weight: bold; border-bottom: 2px solid #333; padding-bottom: 5px; }
+    .bill-to { font-size: 16px; margin-bottom: 20px; }
+    .company-info { text-align: right; font-size: 13px; }
+    .summary-table { width: 100%; border-collapse: collapse; margin-top: 30px; }
+    .summary-table th, .summary-table td { border: 1px solid #ccc; padding: 10px; text-align: left; }
+    .summary-table th { background: #f2f2f2; }
+    .total-amount { font-size: 20px; font-weight: bold; color: #e74c3c; margin: 20px 0; text-align: right; }
+    .bank-details { background: #f9f9f9; padding: 15px; border-left: 4px solid #3498db; margin-top: 40px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="title">御請求書</div>
+      <div class="bill-to" style="margin-top:20px;">
+        <b>${tData.tellerName} 先生 御中</b>
+      </div>
+    </div>
+    <div class="company-info">
+      <div>請求番号: INV-${tData.tellerId}-${targetMonth.replace('-', '')}</div>
+      <div>発行日: ${Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd')}</div>
+      <br>
+      <b>${compName}</b><br>
+      ${compAddr}<br>
+    </div>
+  </div>
+
+  <p>毎度格別のお引き立てを賜り、厚く御礼申し上げます。<br>下記の通り御請求申し上げます。</p>
+
+  <div class="total-amount">
+    御請求金額: ¥${tData.billingAmount.toLocaleString()} - (税込)
+  </div>
+
+  <table class="summary-table">
+    <thead>
+      <tr>
+        <th>項目 / 明細</th>
+        <th>数量</th>
+        <th>単価 / 手数料</th>
+        <th>金額</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>西洋占星術システム 基本利用料</td>
+        <td>1 ヶ月</td>
+        <td>¥${tData.baseFee.toLocaleString()}</td>
+        <td>¥${tData.baseFee.toLocaleString()}</td>
+      </tr>
+      <tr>
+        <td>診断発行手数料 (${tData.commissionRate}% モデル)</td>
+        <td>${tData.totalCount} 件 (総売上: ¥${tData.totalSales.toLocaleString()})</td>
+        <td>${tData.commissionRate} %</td>
+        <td>¥${(Math.round(tData.totalSales * (tData.commissionRate / 100))).toLocaleString()}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="bank-details">
+    <b>【お振込先口座情報】</b><br>
+    ${compBank}<br>
+    ※恐れ入りますが、振込手数料は貴殿にてご負担いただきますようお願い申し上げます。
+  </div>
+</body>
+</html>
+    `;
+
+    // PDFの生成・保存
+    const tempFile = DriveApp.createFile('temp_invoice_' + Date.now() + '.html', htmlInvoice, 'text/html');
+    const pdfBlob = tempFile.getAs('application/pdf').setName(`請求書_${tData.tellerName}_${targetMonth}.pdf`);
+    
+    const folderId = config.DRIVE_PROCESSED_IMAGE_FOLDER_ID || '';
+    let folder = DriveApp.getRootFolder();
+    if (folderId) {
+      try { folder = DriveApp.getFolderById(folderId); } catch(e) {}
+    }
+    const pdfFile = folder.createFile(pdfBlob);
+    pdfFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    const pdfUrl = pdfFile.getDownloadUrl();
+
+    // 一時ファイル削除
+    tempFile.setTrashed(true);
+
+    return { ok: true, status: 'ok', pdfUrl: pdfUrl };
+  }, 'generateInvoicePdf');
+}
+
+// ────────────────────────────────────────
+// 🔮 西洋占星術 内部ヘルパー関数群
+// ────────────────────────────────────────
+
+/**
+ * 太陽星座を割り出す簡易ロジック
+ */
+function getSunSign(dateStr) {
+  try {
+    const parts = dateStr.split('-');
+    const month = parseInt(parts[1], 10);
+    const day = parseInt(parts[2], 10);
+    
+    const signs = ["山羊座", "水瓶座", "魚座", "牡羊座", "牡牛座", "双子座", "蟹座", "獅子座", "乙女座", "天秤座", "蠍座", "射手座", "山羊座"];
+    const dates = [20, 19, 20, 20, 21, 21, 22, 23, 23, 23, 22, 21];
+    
+    return day < dates[month - 1] ? signs[month - 1] : signs[month];
+  } catch (e) {
+    return '牡羊座'; // フォールバック
+  }
+}
+
+/**
+ * 顧客データを検索
+ */
+function getCustomer(sheet, lineUserId) {
+  const rows = sheet.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === lineUserId) {
+      return {
+        lineUserId: rows[i][0],
+        displayName: rows[i][1],
+        realName: rows[i][2],
+        status: rows[i][4]
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * 顧客データを登録または更新
+ */
+function addOrUpdateCustomer(sheet, lineUserId, displayName, realName, status) {
+  const rows = sheet.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === lineUserId) {
+      if (realName) sheet.getRange(i + 1, 3).setValue(realName);
+      if (status) sheet.getRange(i + 1, 5).setValue(status);
+      return;
+    }
+  }
+  sheet.appendRow([
+    lineUserId,
+    displayName,
+    realName || '',
+    new Date(),
+    status || '未登録'
+  ]);
+}
+
+/**
+ * 占い師のステータスとサブスクIDを更新
+ */
+function updateTellerStatus(sheet, tellerId, status, subscriptionId) {
+  const rows = sheet.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === tellerId) {
+      sheet.getRange(i + 1, 7).setValue(status);
+      if (subscriptionId) sheet.getRange(i + 1, 13).setValue(subscriptionId);
+      return;
+    }
+  }
+}
+
+/**
+ * サブスクIDから占い師情報を検索
+ */
+function getTellerBySubscriptionId(sheet, subscriptionId) {
+  const rows = sheet.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][12] === subscriptionId) {
+      return { tellerId: rows[i][0], tellerName: rows[i][1] };
+    }
+  }
+  return null;
+}
+
+function getTellerName(sheet, tellerId) {
+  const rows = sheet.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === tellerId) return rows[i][1];
+  }
+  return tellerId;
+}
+
+/**
+ * LINE Developers プロファイルAPI呼び出し
+ */
+function getUserLineProfile(accessToken, userId) {
+  try {
+    const url = 'https://api.line.me/v2/bot/profile/' + userId;
+    const response = UrlFetchApp.fetch(url, {
+      method: 'get',
+      headers: { 'Authorization': 'Bearer ' + accessToken },
+      muteHttpExceptions: true
+    });
+    return JSON.parse(response.getContentText());
+  } catch (e) {
+    return { displayName: 'LINEユーザー' };
+  }
+}
+
+/**
+ * LINE プッシュメッセージ送信
+ */
+function sendLineMessage(accessToken, to, messages) {
+  try {
+    const url = 'https://api.line.me/v2/bot/message/push';
+    const payload = { to: to, messages: messages };
+    UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'Authorization': 'Bearer ' + accessToken },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+  } catch (e) {
+    console.error('LINE送信エラー:', e.message);
+  }
+}
+
+/**
+ * Discordへの西洋占星術の専用Webフック通知
+ */
+function sendDiscordAstrologyNotification(content) {
+  try {
+    const config = getKCSSettings();
+    const webhooks = (() => { try { return JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch(e) { return {}; } })();
+    const webhookUrl = webhooks['西洋占星術'] || config.KCS_HQ_WEBHOOK_URL || Object.values(webhooks)[0];
+    
+    if (webhookUrl) {
+      UrlFetchApp.fetch(webhookUrl, {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify({
+          content: content,
+          username: '🔮 西洋占星術管理エンジン'
+        }),
+        muteHttpExceptions: true
+      });
+    }
+  } catch (e) {
+    console.error('Discord通知エラー:', e.message);
+  }
+}
+
+/**
+ * Gemini API による鑑定書生成
+ */
+function callGeminiAstrology(prompt, apiKey) {
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }]
+    };
+    const response = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    
+    const resText = response.getContentText();
+    const data = JSON.parse(resText);
+    if (data.candidates && data.candidates[0]?.content?.parts[0]?.text) {
+      return data.candidates[0].content.parts[0].text;
+    }
+    return '';
+  } catch (e) {
+    console.error('Gemini呼び出しエラー:', e.message);
+    return '';
+  }
+}
+
+/**
+ * HTML鑑定書PDF用テンプレート生成
+ */
+function createHtmlReportTemplate(tellerName, customerName, birthDate, birthTime, birthPlace, sunSign, planName, textResult) {
+  // マークダウンの簡単なHTML置換
+  let formattedText = textResult
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br>')
+    .replace(/### (.*?)(<br>|$)/g, '<h3>$1</h3>')
+    .replace(/## (.*?)(<br>|$)/g, '<h2>$1</h2>')
+    .replace(/# (.*?)(<br>|$)/g, '<h1>$1</h1>')
+    .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+
+  return `
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>${customerName} 様 西洋占星術鑑定書</title>
+  <style>
+    @page { size: A4; margin: 15mm; }
+    body { font-family: serif; color: #2c3e50; line-height: 1.8; background: #fff; padding: 20px; }
+    .cover { text-align: center; padding: 100px 20px; border: 2px solid #d4af37; border-radius: 10px; margin-bottom: 50px; }
+    .cover-title { font-size: 32px; font-weight: bold; color: #1a252f; margin-bottom: 10px; letter-spacing: 2px; }
+    .cover-subtitle { font-size: 16px; color: #7f8c8d; margin-bottom: 40px; }
+    .meta-info { margin-top: 50px; font-size: 14px; text-align: left; display: inline-block; border-top: 1px solid #ccc; padding-top: 20px; }
+    .content { margin-top: 40px; text-align: justify; }
+    h1, h2, h3 { color: #1a252f; border-bottom: 1px solid #d4af37; padding-bottom: 5px; margin-top: 30px; }
+    p { margin-bottom: 15px; }
+    .footer { margin-top: 100px; text-align: center; font-size: 12px; color: #7f8c8d; border-top: 1px solid #eee; padding-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="cover">
+    <div style="font-size:40px; margin-bottom:20px;">🔮</div>
+    <div class="cover-title">西洋占星術鑑定書</div>
+    <div class="cover-subtitle">${planName}</div>
+    
+    <div style="margin-top: 60px; font-size: 20px;">
+      <b>${customerName} 様</b>
+    </div>
+    
+    <div class="meta-info">
+      出生データ: ${birthDate} ${birthTime || '時間不明'} (出生地: ${birthPlace})<br>
+      太陽星座: ${sunSign}<br>
+      鑑定担当: 占星術師 ${tellerName}
+    </div>
+  </div>
+
+  <div class="content">
+    <p>${formattedText}</p>
+  </div>
+
+  <div class="footer">
+    西洋占星術自動鑑定システム / プロデュース: KCS合同会社
+  </div>
+</body>
+</html>
+  `;
+}
+
+/**
+ * 占い師専用ダッシュボードデータの取得
+ */
+function getTellerDashboardData(tellerId) {
+  return withErrorHandling(() => {
+    if (!tellerId) return { ok: false, error: 'tellerId は必須です。' };
+    
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const salesSheet = ss.getSheetByName('占星術_販売履歴');
+    const xSheet = ss.getSheetByName('占星術_X投稿管理');
+    const masterSheet = ss.getSheetByName('占星術_占い師マスター');
+    
+    if (!salesSheet || !xSheet || !masterSheet) {
+      return { ok: false, error: '必要なシートが見つかりません。' };
+    }
+    
+    // 占い師自身の基本設定の取得
+    const masters = masterSheet.getDataRange().getValues().slice(1);
+    let tellerInfo = null;
+    for (const m of masters) {
+      if (m[0] === tellerId) {
+        tellerInfo = {
+          tellerId: m[0],
+          tellerName: m[1],
+          email: m[2],
+          baseFee: Number(m[4] || 0),
+          commissionRate: Number(m[5] || 0),
+          status: m[6]
+        };
+        break;
+      }
+    }
+    
+    if (!tellerInfo) return { ok: false, error: '占い師が見つかりません。' };
+    
+    // 販売履歴のフィルター
+    const salesRows = salesSheet.getDataRange().getValues();
+    const customers = [];
+    let totalSales = 0;
+    let totalCount = 0;
+    
+    for (let i = 1; i < salesRows.length; i++) {
+      const row = salesRows[i];
+      const sTellerId = row[2];
+      if (sTellerId !== tellerId) continue;
+      
+      const amount = Number(row[5] || 0);
+      const status = row[8];
+      
+      if (status === '発行完了') {
+        totalSales += amount;
+        totalCount++;
+      }
+      
+      customers.push({
+        index: i + 1,
+        timestamp: Utilities.formatDate(new Date(row[0]), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm'),
+        transactionId: row[1],
+        customerName: row[3],
+        planName: row[4],
+        amount: amount,
+        lineUserId: row[6],
+        pdfUrl: row[7],
+        status: status
+      });
+    }
+    
+    // X投稿管理のフィルター
+    const xPosts = [];
+    try {
+      const xRows = xSheet.getDataRange().getValues();
+      for (let i = 1; i < xRows.length; i++) {
+        const row = xRows[i];
+        const xTellerId = row[1];
+        if (xTellerId !== tellerId) continue;
+        
+        xPosts.push({
+          index: i + 1,
+          timestamp: Utilities.formatDate(new Date(row[0]), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm'),
+          content: row[2],
+          status: row[3],
+          scheduledTime: Utilities.formatDate(new Date(row[4]), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm'),
+          postId: row[5]
+        });
+      }
+    } catch(e) {
+      console.error('X投稿履歴取得エラー:', e.message);
+    }
+    
+    // KCSへの請求額計算 (月額固定費 + 売上の手数料率%)
+    const billingAmount = tellerInfo.baseFee + Math.round(totalSales * (tellerInfo.commissionRate / 100));
+    
+    return {
+      ok: true,
+      tellerInfo: tellerInfo,
+      summary: {
+        totalSales: totalSales,
+        totalCount: totalCount,
+        billingAmount: billingAmount,
+        netSales: totalSales - billingAmount
+      },
+      customers: customers.reverse(),
+      xPosts: xPosts.reverse()
+    };
+  }, 'getTellerDashboardData');
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// KCS 1日全体ヘルスモニタ＆自己修復システム（2026-06-09 追加）
+// ・kcsHealthMonitor : 1時間毎にトリガー実行、各サブシステムを巡回チェック
+// ・kcsDailyAudit    : 毎日21時、1日の活動サマリーをDiscordに送信
+// ・runSelfHeal      : 検知した異常の自動復旧（トリガー欠落の再登録等）
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// 監視に使用する必須トリガーの一覧
+const KCS_REQUIRED_TRIGGERS = [
+  'morningBriefing',
+  'generateDailyReport',
+  'autoPostAffiliateAmazon',
+  'autoPostAffiliateRakuten',
+  'autoReplyTick',
+  'gmailMonitorTick',
+  'processDriveKnowledgeImages',
+  'kcsHealthMonitor',
+  'kcsDailyAudit'
+];
+
+// 投稿本文に絶対に混入してはいけないNGパターン
+const KCS_NG_CONTENT_PATTERNS = [
+  { name: 'JSON生波カッコ',     re: /\{\s*"post"\s*:/u },
+  { name: 'Geminiラベル',       re: /\*\*Gemini\*\*|🤖\s*\*\*Gemini/u },
+  { name: 'Claudeラベル',       re: /\*\*Claude\*\*/u },
+  { name: 'codeフェンスjson',   re: /```json/u },
+  { name: 'AI挨拶',             re: /^(?:承知(?:いた)?しました|了解(?:いた)?しました|わかりました)/u },
+  { name: '前回投稿の追記前置き', re: /先ほどの投稿への追加コメント/u },
+];
+
+// メイン: 1時間毎の総合ヘルスチェック
+function kcsHealthMonitor() {
+  return withErrorHandling(() => {
+    const ts = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm');
+    console.log(`[kcsHealthMonitor] === 開始 ${ts} ===`);
+
+    const results = {
+      timestamp: ts,
+      triggers:   checkTriggersIntact(),
+      xContent:   checkRecentXContent(),
+      discord:    checkDiscordWebhooks(),
+      apiKeys:    checkApiKeysSet(),
+      postCounts: checkRecentPostCounts(),
+      gmail:      checkGmailMonitorAlive(),
+    };
+
+    const issues = [];
+    if (!results.triggers.ok)   issues.push(`🔴 トリガー欠落: ${results.triggers.missing.join(', ')}`);
+    if (!results.xContent.ok)   issues.push(`🔴 X投稿コンテンツ汚染: ${results.xContent.dirty.length}件 (${results.xContent.dirty.map(d=>d.account+':'+d.patterns.join(',')).join(' / ')})`);
+    if (!results.discord.ok)    issues.push(`🟡 Discord webhook不応答: ${results.discord.failed.join(', ')}`);
+    if (!results.apiKeys.ok)    issues.push(`🟡 APIキー未設定: ${results.apiKeys.missing.join(', ')}`);
+    if (!results.postCounts.ok) issues.push(`🟡 投稿停滞: ${results.postCounts.stalled.join(', ')}`);
+    if (!results.gmail.ok)      issues.push(`🟡 Gmail監視停止: ${results.gmail.reason}`);
+
+    // 自己修復実行
+    const healed = runSelfHeal(results);
+
+    // 直近結果を ScriptProperties に保存
+    recordHealthHistory(results, issues, healed);
+
+    // 異常があればDiscordに即時通知（1時間に1回スロットリング済み: notifyDiscordError側で重複抑制）
+    if (issues.length > 0) {
+      const msg = `🩺 **KCS ヘルスチェック異常検知** [${ts}]\n\n` +
+        issues.join('\n') +
+        (healed.length ? `\n\n✅ 自動修復実行: ${healed.join(', ')}` : '') +
+        `\n\n詳細は GAS Execution Logs を確認。`;
+      try { notifyDiscordError('kcsHealthMonitor', issues.join(' | '), '自己修復: ' + healed.join(',')); } catch(e) {}
+      try {
+        const config = getKCSSettings();
+        const webhooks = JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}');
+        const wh = webhooks['error-log'] || webhooks['エラーログ'] || webhooks['KCS本部'] || Object.values(webhooks)[0];
+        if (wh) sendDiscordWebhook(wh, msg, 'KCS Health Monitor');
+      } catch(e) { console.warn('[kcsHealthMonitor] Discord通知失敗:', e.message); }
+    } else {
+      console.log('[kcsHealthMonitor] ✅ 全項目正常');
+    }
+
+    return results;
+  }, 'kcsHealthMonitor');
+}
+
+// ━━━ 個別チェック関数 ━━━
+
+function checkTriggersIntact() {
+  const existing = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
+  const missing = KCS_REQUIRED_TRIGGERS.filter(name => !existing.includes(name));
+  return { ok: missing.length === 0, missing, existingCount: existing.length };
+}
+
+// HAL/すなくん の直近10投稿を取得し、NGパターンが混入していないかチェック
+function checkRecentXContent() {
+  const dirty = [];
+  ['hal', 'sunakun'].forEach(account => {
+    try {
+      const tweets = fetchRecentTweetsForAccount(account, 10);
+      tweets.forEach(t => {
+        const matched = KCS_NG_CONTENT_PATTERNS
+          .filter(p => p.re.test(t.text))
+          .map(p => p.name);
+        if (matched.length > 0) {
+          dirty.push({ account, tweetId: t.id, text: t.text.slice(0, 80), patterns: matched });
+        }
+      });
+    } catch(e) {
+      console.warn(`[checkRecentXContent][${account}] 取得失敗: ${e.message}`);
+    }
+  });
+  return { ok: dirty.length === 0, dirty };
+}
+
+// OAuth 1.0a で /2/users/me を叩き、アカウントの実ユーザーID/ハンドルを解決する（24hキャッシュ）
+// 設定シートの SUNAKUN_X_USER_ID / HAL_X_USER_ID が実アカウントとズレていても自己修復する
+function resolveXUserId(account, configuredId, keys) {
+  const props = PropertiesService.getScriptProperties();
+  const cacheKey = 'X_RESOLVED_USER_' + account;
+  try {
+    const cached = JSON.parse(props.getProperty(cacheKey) || 'null');
+    if (cached && cached.id && (Date.now() - (cached.ts || 0)) < 24 * 60 * 60 * 1000) {
+      return cached.id;
+    }
+  } catch (e) {}
+
+  const meUrl = 'https://api.twitter.com/2/users/me';
+  const nonce = Utilities.getUuid().replace(/-/g, '');
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const oauthParams = {
+    oauth_consumer_key:     keys.consumerKey,
+    oauth_nonce:            nonce,
+    oauth_signature_method: 'HMAC-SHA1',
+    oauth_timestamp:        timestamp,
+    oauth_token:            keys.accessToken,
+    oauth_version:          '1.0'
+  };
+  const paramStr = Object.keys(oauthParams).sort()
+    .map(k => `${encodeRFC3986(k)}=${encodeRFC3986(oauthParams[k])}`)
+    .join('&');
+  const baseStr = `GET&${encodeRFC3986(meUrl)}&${encodeRFC3986(paramStr)}`;
+  const signingKey = `${encodeRFC3986(keys.consumerSecret)}&${encodeRFC3986(keys.accessSecret)}`;
+  oauthParams['oauth_signature'] = Utilities.base64Encode(
+    Utilities.computeHmacSignature(Utilities.MacAlgorithm.HMAC_SHA_1, baseStr, signingKey)
+  );
+  const authHeader = 'OAuth ' + Object.keys(oauthParams).sort()
+    .map(k => `${encodeRFC3986(k)}="${encodeRFC3986(oauthParams[k])}"`)
+    .join(', ');
+
+  try {
+    const res = UrlFetchApp.fetch(meUrl, { method: 'get', headers: { 'Authorization': authHeader }, muteHttpExceptions: true });
+    if (res.getResponseCode() === 200) {
+      const me = JSON.parse(res.getContentText());
+      if (me.data && me.data.id) {
+        props.setProperty(cacheKey, JSON.stringify({ id: me.data.id, username: me.data.username || '', ts: Date.now() }));
+        if (configuredId && configuredId !== me.data.id) {
+          console.warn(`[resolveXUserId][${account}] 設定のUSER_ID(${configuredId})と実ID(${me.data.id} @${me.data.username})が不一致。実IDを使用します。`);
+        }
+        return me.data.id;
+      }
+    }
+    console.warn(`[resolveXUserId][${account}] /2/users/me HTTP ${res.getResponseCode()}: ${res.getContentText().slice(0,120)}`);
+  } catch (e) {
+    console.warn(`[resolveXUserId][${account}] 例外: ${e.message}`);
+  }
+  return configuredId || '';
+}
+
+function fetchRecentTweetsForAccount(account, max) {
+  const config = getKCSSettings();
+  let userId, consumerKey, consumerSecret, accessToken, accessSecret;
+  if (account === 'hal') {
+    userId         = config.HAL_X_USER_ID || '';
+    consumerKey    = config.HAL_X_CONSUMER_KEY;
+    consumerSecret = config.HAL_X_CONSUMER_SECRET;
+    accessToken    = config.HAL_X_ACCESS_TOKEN;
+    accessSecret   = config.HAL_X_ACCESS_SECRET;
+  } else {
+    userId         = config.SUNAKUN_X_USER_ID || '';
+    consumerKey    = config.X_CONSUMER_KEY;
+    consumerSecret = config.X_CONSUMER_SECRET;
+    accessToken    = config.X_ACCESS_TOKEN;
+    accessSecret   = config.X_ACCESS_SECRET;
+  }
+  if (!consumerKey || !accessToken) return [];
+
+  // 設定シートのIDが古い/誤りでも自己修復できるよう、/2/users/me で実IDを解決（24時間キャッシュ）
+  userId = resolveXUserId(account, userId, { consumerKey, consumerSecret, accessToken, accessSecret });
+  if (!userId) return [];
+
+  const baseUrl = `https://api.twitter.com/2/users/${userId}/tweets`;
+  const url = `${baseUrl}?max_results=${Math.min(Math.max(max, 5), 100)}&tweet.fields=created_at`;
+  const nonce = Utilities.getUuid().replace(/-/g, '');
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const oauthParams = {
+    oauth_consumer_key:     consumerKey,
+    oauth_nonce:            nonce,
+    oauth_signature_method: 'HMAC-SHA1',
+    oauth_timestamp:        timestamp,
+    oauth_token:            accessToken,
+    oauth_version:          '1.0'
+  };
+  const allParams = Object.assign({}, oauthParams, {
+    max_results: String(Math.min(Math.max(max, 5), 100)),
+    'tweet.fields': 'created_at'
+  });
+  const paramStr = Object.keys(allParams).sort()
+    .map(k => `${encodeRFC3986(k)}=${encodeRFC3986(allParams[k])}`)
+    .join('&');
+  const baseStr = `GET&${encodeRFC3986(baseUrl)}&${encodeRFC3986(paramStr)}`;
+  const signingKey = `${encodeRFC3986(consumerSecret)}&${encodeRFC3986(accessSecret)}`;
+  const signature = Utilities.base64Encode(
+    Utilities.computeHmacSignature(Utilities.MacAlgorithm.HMAC_SHA_1, baseStr, signingKey)
+  );
+  oauthParams['oauth_signature'] = signature;
+  const authHeader = 'OAuth ' + Object.keys(oauthParams).sort()
+    .map(k => `${encodeRFC3986(k)}="${encodeRFC3986(oauthParams[k])}"`)
+    .join(', ');
+
+  const res = UrlFetchApp.fetch(url, {
+    method: 'get',
+    headers: { 'Authorization': authHeader },
+    muteHttpExceptions: true
+  });
+  const code = res.getResponseCode();
+  if (code !== 200) {
+    console.warn(`[fetchRecentTweetsForAccount][${account}] HTTP ${code}: ${res.getContentText().slice(0,200)}`);
+    return [];
+  }
+  const body = JSON.parse(res.getContentText());
+  return (body.data || []).map(t => ({ id: t.id, text: t.text || '', createdAt: t.created_at }));
+}
+
+function checkDiscordWebhooks() {
+  const config = getKCSSettings();
+  let webhooks = {};
+  try { webhooks = JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch(e) { return { ok: false, failed: ['DISCORD_WEBHOOK_URLS JSONパース失敗'] }; }
+  const failed = [];
+  Object.keys(webhooks).forEach(name => {
+    const url = webhooks[name];
+    if (!url || !url.startsWith('http')) { failed.push(`${name}(無効URL)`); return; }
+    try {
+      // HEADは未サポートなのでGETで疎通確認のみ（Discord webhookはGETで200を返す）
+      const res = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
+      const code = res.getResponseCode();
+      // 429はレート制限＝webhook自体は生きているので異常扱いしない（毎時の誤報防止）
+      if (code >= 400 && code !== 429) failed.push(`${name}(HTTP${code})`);
+    } catch(e) {
+      failed.push(`${name}(例外: ${e.message.slice(0,40)})`);
+    }
+  });
+  return { ok: failed.length === 0, failed, total: Object.keys(webhooks).length };
+}
+
+function checkApiKeysSet() {
+  const config = getKCSSettings();
+  // CLAUDE_API_KEYは意図的に一時停止中（CLAUDE_API_KEY_PAUSED）のため必須から除外。生成系はGeminiが主担当
+  const required = [
+    'GEMINI_API_KEY',
+    'X_CONSUMER_KEY','X_CONSUMER_SECRET','X_ACCESS_TOKEN','X_ACCESS_SECRET',
+    'HAL_X_CONSUMER_KEY','HAL_X_CONSUMER_SECRET','HAL_X_ACCESS_TOKEN','HAL_X_ACCESS_SECRET',
+    'DISCORD_BOT_TOKEN','DISCORD_WEBHOOK_URLS',
+    'GITHUB_TOKEN','GITHUB_REPO',
+  ];
+  const missing = required.filter(k => !config[k]);
+  return { ok: missing.length === 0, missing };
+}
+
+// 直近の投稿数を ScriptProperties に保存し、前回と比較して停滞を検知
+function checkRecentPostCounts() {
+  const props = PropertiesService.getScriptProperties();
+  const now = Date.now();
+  const stalled = [];
+  const snapshot = {};
+  ['hal', 'sunakun'].forEach(account => {
+    try {
+      const tweets = fetchRecentTweetsForAccount(account, 10);
+      const latestEpoch = tweets.length > 0 ? new Date(tweets[0].createdAt).getTime() : 0;
+      snapshot[account] = { count: tweets.length, latestEpoch };
+      // 24時間以上投稿なし = 停滞
+      if (latestEpoch > 0 && (now - latestEpoch) > 24 * 60 * 60 * 1000) {
+        stalled.push(`${account}(${Math.floor((now-latestEpoch)/3600000)}h無投稿)`);
+      }
+    } catch(e) {
+      console.warn(`[checkRecentPostCounts][${account}] ${e.message}`);
+    }
+  });
+  props.setProperty('KCS_LAST_POST_SNAPSHOT', JSON.stringify({ ts: now, snapshot }));
+  return { ok: stalled.length === 0, stalled, snapshot };
+}
+
+// Gmail監視ハートビートと最新サーチ結果の死活確認
+// gmailMonitorTick が GMAIL_LAST_RUN_TS を毎時更新するので、3時間以上更新がなければ停止判定
+function checkGmailMonitorAlive() {
+  const props = PropertiesService.getScriptProperties();
+  const lastRun = Number(props.getProperty('GMAIL_LAST_RUN_TS') || '0');
+  const lastCheck = Number(props.getProperty('GMAIL_LAST_CHECK') || '0');
+  const now = Date.now();
+  if (!lastRun) {
+    return { ok: false, reason: '一度も走った形跡なし（GMAIL_LAST_RUN_TS未設定）', lastRun: 0 };
+  }
+  const ageHours = (now - lastRun) / 3600000;
+  if (ageHours > 3) {
+    return { ok: false, reason: `${Math.floor(ageHours)}時間前から停止`, lastRun };
+  }
+  return { ok: true, lastRun, lastRunIso: new Date(lastRun).toISOString(), lastCheckIso: lastCheck ? new Date(lastCheck).toISOString() : null };
+}
+
+// ━━━ 自己修復 ━━━
+function runSelfHeal(results) {
+  const healed = [];
+  // 1. トリガー欠落 → 再登録
+  if (results.triggers && !results.triggers.ok && results.triggers.missing.length > 0) {
+    try {
+      setupAllTriggers();
+      setupMonitoringTriggers();
+      healed.push(`トリガー再登録(${results.triggers.missing.length}件)`);
+    } catch(e) { console.warn('[runSelfHeal] トリガー再登録失敗:', e.message); }
+  }
+  // 2. X投稿コンテンツ汚染 → 削除権限なしのため通知のみ（社長へ手動削除を促す）
+  // 3. Discord webhook 不応答 → リトライ1回
+  if (results.discord && !results.discord.ok) {
+    console.log('[runSelfHeal] Discord webhook 不応答を検知。次サイクルで再チェック。');
+  }
+  // 4. Gmail監視停止 → gmailMonitorTickをその場で1回叩いて復帰確認
+  if (results.gmail && !results.gmail.ok) {
+    try {
+      gmailMonitorTick();
+      healed.push('gmailMonitorTick手動キック');
+    } catch(e) { console.warn('[runSelfHeal] gmailMonitorTick再起動失敗:', e.message); }
+  }
+  return healed;
+}
+
+// ━━━ ヘルスチェック履歴記録 ━━━
+function recordHealthHistory(results, issues, healed) {
+  const props = PropertiesService.getScriptProperties();
+  const history = JSON.parse(props.getProperty('KCS_HEALTH_HISTORY') || '[]');
+  history.unshift({
+    ts: results.timestamp,
+    ok: issues.length === 0,
+    issues, healed,
+    counts: results.postCounts && results.postCounts.snapshot
+  });
+  // 直近48件（48時間分）のみ保持
+  props.setProperty('KCS_HEALTH_HISTORY', JSON.stringify(history.slice(0, 48)));
+}
+
+// ━━━ 毎日21時の日次監査サマリー ━━━
+function kcsDailyAudit() {
+  return withErrorHandling(() => {
+    const props = PropertiesService.getScriptProperties();
+    const history = JSON.parse(props.getProperty('KCS_HEALTH_HISTORY') || '[]');
+    const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
+    const todays = history.filter(h => String(h.ts).startsWith(today));
+
+    const okCount = todays.filter(h => h.ok).length;
+    const ngCount = todays.length - okCount;
+    const issueLines = [];
+    const issueMap = {};
+    todays.filter(h => !h.ok).forEach(h => {
+      (h.issues || []).forEach(iss => {
+        const head = iss.split(':')[0].replace(/^[🔴🟡]\s*/, '');
+        issueMap[head] = (issueMap[head] || 0) + 1;
+      });
+    });
+    Object.keys(issueMap).forEach(k => issueLines.push(`- ${k}: ${issueMap[k]}回`));
+
+    // 即時のX投稿状況スナップショット
+    const xSnap = JSON.parse(props.getProperty('KCS_LAST_POST_SNAPSHOT') || '{}');
+    const snap = xSnap.snapshot || {};
+
+    const msg =
+      `📋 **KCS 日次監査レポート [${today}]**\n\n` +
+      `🩺 ヘルスチェック実行: ${todays.length}回 (✅${okCount} / ❌${ngCount})\n` +
+      (issueLines.length ? `\n**頻出イシュー:**\n${issueLines.join('\n')}\n` : '\n✅ 本日は異常なし\n') +
+      `\n**X直近投稿スナップショット:**\n` +
+      `- HAL: 取得${snap.hal?.count || 0}件, 最新${snap.hal?.latestEpoch ? Utilities.formatDate(new Date(snap.hal.latestEpoch), 'Asia/Tokyo', 'MM/dd HH:mm') : '-'}\n` +
+      `- すなくん: 取得${snap.sunakun?.count || 0}件, 最新${snap.sunakun?.latestEpoch ? Utilities.formatDate(new Date(snap.sunakun.latestEpoch), 'Asia/Tokyo', 'MM/dd HH:mm') : '-'}\n`;
+
+    try {
+      const config = getKCSSettings();
+      const webhooks = JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}');
+      const wh = webhooks['daily-report'] || webhooks['KCS本部'] || Object.values(webhooks)[0];
+      if (wh) sendDiscordWebhook(wh, msg, 'KCS Daily Audit');
+    } catch(e) { console.warn('[kcsDailyAudit] Discord送信失敗:', e.message); }
+    console.log(msg);
+    return { ok: true, totalChecks: todays.length, ngCount };
+  }, 'kcsDailyAudit');
+}
+
+// ━━━ 監視トリガー登録 ━━━
+function setupMonitoringTriggers() {
+  const existing = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
+  const created = [];
+  if (!existing.includes('kcsHealthMonitor')) {
+    ScriptApp.newTrigger('kcsHealthMonitor').timeBased().everyHours(1).create();
+    created.push('kcsHealthMonitor (1時間毎)');
+  }
+  if (!existing.includes('kcsDailyAudit')) {
+    ScriptApp.newTrigger('kcsDailyAudit').timeBased().atHour(21).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
+    created.push('kcsDailyAudit (毎日21時)');
+  }
+  console.log('[setupMonitoringTriggers] 新規追加: ' + (created.join(', ') || 'なし（既設）'));
+  return { ok: true, created };
+}
+
