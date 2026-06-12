@@ -1,9 +1,7 @@
-name: Morning Briefing (9:00 AM JST)
+name: Morning Briefing (backup - manual only)
 
 on:
-  schedule:
-    # 毎日 日本時間 午前9:00 (UTC 0:00)
-    - cron: '0 0 * * *'
+  # cron削除: GASトリガー(毎朝8時)が主系統
   workflow_dispatch:
 
 jobs:

@@ -2,25 +2,22 @@ name: X Auto Post
 
 on:
   schedule:
-    # すなくん Amazon投稿（毎日 12:00 JST = 03:00 UTC）
-    - cron: '0 3 * * *'
-    # すなくん 楽天投稿（毎日 18:00 JST = 09:00 UTC）
-    - cron: '0 9 * * *'
     # HAL 投稿（毎日 10:00 JST = 01:00 UTC）
     - cron: '0 1 * * *'
     # HAL 午後投稿（毎日 15:00 JST = 06:00 UTC）
     - cron: '0 6 * * *'
+    # すなくんはGASトリガーが主系統のためcron削除済み
   workflow_dispatch:
     inputs:
       action:
         description: 'GASアクション'
         required: true
-        default: 'auto_post_affiliate_amazon'
+        default: 'auto_post_hal'
         type: choice
         options:
+          - auto_post_hal
           - auto_post_affiliate_amazon
           - auto_post_affiliate_rakuten
-          - auto_post_hal
 
 jobs:
   post-to-x:
@@ -32,14 +29,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "name=${{ github.event.inputs.action }}" >> $GITHUB_OUTPUT
           else
-            HOUR=$(date -u +%H)
-            case "$HOUR" in
-              01) echo "name=auto_post_hal" >> $GITHUB_OUTPUT ;;
-              06) echo "name=auto_post_hal" >> $GITHUB_OUTPUT ;;
-              03) echo "name=auto_post_affiliate_amazon" >> $GITHUB_OUTPUT ;;
-              09) echo "name=auto_post_affiliate_rakuten" >> $GITHUB_OUTPUT ;;
-              *)  echo "name=auto_post_hal" >> $GITHUB_OUTPUT ;;
-            esac
+            echo "name=auto_post_hal" >> $GITHUB_OUTPUT
           fi
 
       - name: Call GAS auto-post

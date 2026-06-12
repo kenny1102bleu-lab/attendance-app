@@ -2078,6 +2078,7 @@ function sendDiscordMessage(channelId, content, token) {
 // 朝ブリーフィング（詳細版）
 // 朝ブリーフィング（AIスタッフ自律ディスカッション＆協働版）
 function morningBriefing() {
+  if (isDuplicateRun('morningBriefing', 30)) return;
   const config = getKCSSettings();
   const webhooks = (() => { try { return JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch(e) { return {}; } })();
   const webhookUrl = config.KCS_HQ_WEBHOOK_URL || webhooks['KCS本部'] || Object.values(webhooks)[0];
@@ -2564,6 +2565,20 @@ function notifyDiscordError(workflowName, errorMsg, suggestion) {
       muteHttpExceptions: true
     });
   } catch (e) { console.error('[ErrorNotify] 送信失敗:', e.message); }
+}
+
+function isDuplicateRun(funcName, cooldownMinutes) {
+  cooldownMinutes = cooldownMinutes || 30;
+  const props = PropertiesService.getScriptProperties();
+  const key = 'DEDUP_LAST_' + funcName;
+  const last = props.getProperty(key);
+  const now = Date.now();
+  if (last && (now - Number(last)) < cooldownMinutes * 60 * 1000) {
+    console.log('[dedup] ' + funcName + ' skipped (ran ' + Math.round((now - Number(last)) / 60000) + 'm ago)');
+    return true;
+  }
+  props.setProperty(key, String(now));
+  return false;
 }
 
 function withErrorHandling(fn, workflowName) {
@@ -3303,6 +3318,7 @@ function generateSunakkunPost(data) {
  * Amazonアフィリエイト自動投稿（毎日12:00トリガー）
  */
 function autoPostAffiliateAmazon() {
+  if (isDuplicateRun('autoPostAffiliateAmazon', 30)) return { ok: true, skipped: 'dedup' };
   return withErrorHandling(() => {
     console.log('[autoPostAffiliateAmazon] トレンド追従型自動投稿を開始');
     const config = getKCSSettings();
@@ -3381,6 +3397,7 @@ function autoPostAffiliateAmazon() {
  * 楽天アフィリエイト自動投稿（毎日18:00トリガー）
  */
 function autoPostAffiliateRakuten() {
+  if (isDuplicateRun('autoPostAffiliateRakuten', 30)) return { ok: true, skipped: 'dedup' };
   return withErrorHandling(() => {
     console.log('[autoPostAffiliateRakuten] トレンド追従型自動投稿を開始');
     const config = getKCSSettings();
@@ -3522,6 +3539,7 @@ function getMemoriesToday() {
 
 
 function generateDailyReport() {
+  if (isDuplicateRun('generateDailyReport', 30)) return { ok: true, skipped: 'dedup' };
   return withErrorHandling(() => {
     const today   = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd (E)');
     const dateTag = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
