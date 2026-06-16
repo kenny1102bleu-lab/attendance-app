@@ -2,8 +2,6 @@ name: X Auto Post
 
 on:
   schedule:
-    - cron: '0 3 * * *'   # すなくん Amazon（12:00 JST）
-    - cron: '0 9 * * *'   # すなくん 楽天（18:00 JST）
     - cron: '0 1 * * *'   # HAL 投稿（10:00 JST）
     - cron: '0 6 * * *'   # HAL 午後（15:00 JST）
   workflow_dispatch:
@@ -11,133 +9,65 @@ on:
       account:
         description: 'アカウント'
         required: true
-        default: 'sunakun'
+        default: 'hal'
         type: choice
         options:
-          - sunakun
           - hal
+
+# すなくんはGASタイマートリガー(12時Amazon/18時楽天)で自律投稿するためここでは扱わない。
+# HALのみGitHub Actions → GAS webhook → 生成+OAuth1.0a投稿の一体フロー。
 
 jobs:
   post-to-x:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install agent-twitter-client
-        run: npm install agent-twitter-client
-
-      # アカウントとGASアクションを決定
-      - name: Determine params
+      - name: Determine account
         id: params
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ACCOUNT="${{ github.event.inputs.account }}"
           else
-            HOUR=$(date -u +%H)
-            if [ "$HOUR" = "01" ] || [ "$HOUR" = "06" ]; then
-              ACCOUNT="hal"
-            else
-              ACCOUNT="sunakun"
-            fi
+            ACCOUNT="hal"
           fi
-
-          # GASには投稿文生成のみ依頼（X投稿はGitHub Actions側で行う）
-          if [ "$ACCOUNT" = "hal" ]; then
-            GAS_ACTION="generate_hal_post"
-          else
-            GAS_ACTION="generate_sunakun_post"
-          fi
-
           echo "account=$ACCOUNT" >> $GITHUB_OUTPUT
-          echo "gas_action=$GAS_ACTION" >> $GITHUB_OUTPUT
-          echo "== $ACCOUNT / $GAS_ACTION =="
+          echo "== $ACCOUNT =="
 
-      # GAS に投稿文生成を依頼
-      - name: Generate tweet via GAS
-        id: generate
-        env:
-          GAS_URL: ${{ secrets.GAS_WEBHOOK_URL }}
-        run: |
-          GAS_ACTION="${{ steps.params.outputs.gas_action }}"
-          echo "GASアクション: $GAS_ACTION"
-
-          RESPONSE=$(curl -s -L --max-time 120 \
-            --data "{\"action\":\"${GAS_ACTION}\",\"platform\":\"X\"}" \
-            -H "Content-Type: application/json" \
-            "${GAS_URL}")
-
-          echo "GAS応答(先頭300): ${RESPONSE:0:300}"
-
-          # テキスト抽出
-          TWEET_TEXT=$(echo "$RESPONSE" | node scripts/extract_tweet.mjs 2>/dev/null || echo "")
-
-          if [ -z "$TWEET_TEXT" ]; then
-            echo "⚠️ テキスト抽出失敗"
-            echo "has_text=false" >> $GITHUB_OUTPUT
-          else
-            echo "取得: $TWEET_TEXT"
-            echo "has_text=true" >> $GITHUB_OUTPUT
-            echo "text<<TWEET_EOF" >> $GITHUB_OUTPUT
-            echo "$TWEET_TEXT" >> $GITHUB_OUTPUT
-            echo "TWEET_EOF" >> $GITHUB_OUTPUT
-          fi
-
-      # 前回ログイン成功時のセッションCookieを復元（再ログイン頻度を下げてX側のBOT検知/エラーを回避）
-      - name: Restore X session cookies
-        id: cookie-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: .x-cookies
-          key: x-cookies-${{ steps.params.outputs.account }}-${{ github.run_id }}
-          restore-keys: |
-            x-cookies-${{ steps.params.outputs.account }}-
-
-      # agent-twitter-client でX投稿（APIクレジット不要）
-      - name: Post to X
-        id: post
-        if: steps.generate.outputs.has_text == 'true'
-        env:
-          # OAuth 1.0a キー（方式1: 優先）
-          X_CONSUMER_KEY: ${{ secrets.X_CONSUMER_KEY }}
-          X_CONSUMER_SECRET: ${{ secrets.X_CONSUMER_SECRET }}
-          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
-          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
-          HAL_X_CONSUMER_KEY: ${{ secrets.HAL_X_CONSUMER_KEY }}
-          HAL_X_CONSUMER_SECRET: ${{ secrets.HAL_X_CONSUMER_SECRET }}
-          HAL_X_ACCESS_TOKEN: ${{ secrets.HAL_X_ACCESS_TOKEN }}
-          HAL_X_ACCESS_SECRET: ${{ secrets.HAL_X_ACCESS_SECRET }}
-          # パスワード認証（方式2: フォールバック）
-          SUNAKUN_X_USERNAME: ${{ secrets.SUNAKUN_X_USERNAME }}
-          SUNAKUN_X_PASSWORD: ${{ secrets.SUNAKUN_X_PASSWORD }}
-          SUNAKUN_X_EMAIL: ${{ secrets.SUNAKUN_X_EMAIL }}
-          HAL_X_USERNAME: ${{ secrets.HAL_X_USERNAME }}
-          HAL_X_PASSWORD: ${{ secrets.HAL_X_PASSWORD }}
-          HAL_X_EMAIL: ${{ secrets.HAL_X_EMAIL }}
-          X_ACCOUNT: ${{ steps.params.outputs.account }}
-          TWEET_TEXT: ${{ steps.generate.outputs.text }}
-        run: node scripts/x_post.mjs
-
-      # 新しいセッションCookieを保存（次回実行時の再ログインを回避）
-      - name: Save X session cookies
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: .x-cookies
-          key: x-cookies-${{ steps.params.outputs.account }}-${{ github.run_id }}
-
-      # 結果をGASに報告 → Discord通知
-      - name: Report to GAS
-        if: always() && steps.generate.outputs.has_text == 'true'
+      # GASに生成+投稿を一体で依頼（agent-twitter-client廃止・GAS OAuth1.0a直接投稿）
+      - name: Generate and post via GAS
+        id: gas
         env:
           GAS_URL: ${{ secrets.GAS_WEBHOOK_URL }}
         run: |
           ACCOUNT="${{ steps.params.outputs.account }}"
-          SUCCESS="${{ steps.post.outputs.success || 'false' }}"
-          TWEET_ID="${{ steps.post.outputs.tweet_id || '' }}"
+          echo "GASに auto_post_${ACCOUNT} を依頼..."
+
+          RESPONSE=$(curl -s -L --max-time 180 \
+            --data "{\"action\":\"auto_post_${ACCOUNT}\",\"platform\":\"X\"}" \
+            -H "Content-Type: application/json" \
+            "${GAS_URL}")
+
+          echo "GAS応答(先頭500): ${RESPONSE:0:500}"
+
+          # 成功判定
+          OK=$(echo "$RESPONSE" | grep -o '"ok":true' || echo "")
+          if [ -n "$OK" ]; then
+            echo "✅ GAS投稿成功"
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ GAS投稿失敗またはタイムアウト"
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      # 結果をDiscordに報告（GAS側でも通知するが二重確認）
+      - name: Report result to GAS
+        if: always()
+        env:
+          GAS_URL: ${{ secrets.GAS_WEBHOOK_URL }}
+        run: |
+          ACCOUNT="${{ steps.params.outputs.account }}"
+          SUCCESS="${{ steps.gas.outputs.success || 'false' }}"
           curl -s -L --max-time 30 \
-            --data "{\"action\":\"report_x_post_result\",\"account\":\"${ACCOUNT}\",\"success\":${SUCCESS},\"tweetId\":\"${TWEET_ID}\",\"text\":\"\"}" \
+            --data "{\"action\":\"report_x_post_result\",\"account\":\"${ACCOUNT}\",\"success\":${SUCCESS},\"source\":\"github_actions\"}" \
             -H "Content-Type: application/json" \
             "${GAS_URL}" || echo "GAS報告スキップ"

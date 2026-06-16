@@ -792,8 +792,9 @@ function doPost(e) {
 
     // ── 朝ブリーフィング ──
     if (body.action === 'morning_briefing') {
-      morningBriefing();
-      return jsonResponse({ status: 'ok', message: '朝ブリーフィングを実行しました' });
+      try { setupMorningBriefingTrigger(); } catch(e) { console.warn('Trigger setup failed:', e.message); }
+      const resMsg = morningBriefing(true);
+      return jsonResponse({ status: 'ok', message: '朝ブリーフィングを実行しました', debug: resMsg });
     }
 
     // ── ダッシュボードから Discord にメッセージ送信 ──
@@ -932,17 +933,9 @@ function doPost(e) {
       return jsonResponse(autoPostAffiliateRakuten());
     }
 
-    // ── HAL 自動投稿（FULL_AUTO_MODE=TRUEが必要）──
+    // ── HAL 自動投稿（生成+OAuth1.0a直接投稿を一体実行）──
     if (body.action === 'auto_post_hal') {
-      const config = getKCSSettings();
-      const isAuto = String(config.FULL_AUTO_MODE).toUpperCase() === 'TRUE';
-      if (!isAuto) {
-        // FULL_AUTO_MODE=FALSE の場合は投稿案を生成してDiscordに送るだけ
-        const result = generateHALPost({ theme: '', platform: 'X', useGemini: true });
-        return jsonResponse({ ok: true, message: 'HAL投稿案をDiscordに送信しました（手動承認モード）', result });
-      }
-      const result = generateHALPost({ theme: '', platform: 'X', useGemini: true });
-      return jsonResponse(result);
+      return jsonResponse(autoPostHAL());
     }
 
     // ── 日次レポート 手動実行 ──
@@ -974,7 +967,7 @@ function doPost(e) {
         finalReply = callClaudeAPI(
           `HALとして以下のコメントに返答してください（口調：おっとり天然癒し系）:\n"${body.text}"`,
           'あなたはHAL（ハル）というAI配信者です。おっとり天然癒し系で「〜だよね？」「〜かも？」という口調で返答します。',
-          'claude-haiku-4-5-20251001'
+          'claude-3-5-haiku-20241022'
         );
       }
 
@@ -2077,10 +2070,40 @@ function sendDiscordMessage(channelId, content, token) {
 
 // 朝ブリーフィング（詳細版）
 // 朝ブリーフィング（AIスタッフ自律ディスカッション＆協働版）
-function morningBriefing() {
-  if (isDuplicateRun('morningBriefing', 30)) return;
+
+function getYesterdaySnsStats() {
+  try {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayDateStr = Utilities.formatDate(yesterday, 'Asia/Tokyo', 'yyyy/MM/dd');
+    
+    const affiliate = getAffiliatePosts();
+    const hal = getHALPosts(); // Assuming this exists or similar
+
+    const allPosts = [...(affiliate.posts || []), ...(hal.posts || [])];
+    
+    const postedYesterday = allPosts.filter(p => {
+      const d = p['投稿日'] || p['投稿時刻'] || '';
+      return d.startsWith(yesterdayDateStr);
+    });
+
+    const totalLikes   = postedYesterday.reduce((s, p) => s + (Number(p['いいね数']) || 0), 0);
+    const totalImpress = postedYesterday.reduce((s, p) => s + (Number(p['インプレッション']) || 0), 0);
+
+    return { count: postedYesterday.length, likes: totalLikes, impressions: totalImpress };
+  } catch (e) {
+    return { count: 0, likes: 0, impressions: 0 };
+  }
+}
+
+function morningBriefing(force = false) {
+  if (!force && isDuplicateRun('morningBriefing', 30)) {
+    console.warn('[morningBriefing] 30分以内の重複実行のためスキップします。');
+    return 'Blocked by isDuplicateRun';
+  }
   const config = getKCSSettings();
   const webhooks = (() => { try { return JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch(e) { return {}; } })();
+  const channels = (() => { try { return JSON.parse(config.DISCORD_CHANNEL_IDS || '{}'); } catch(e) { return {}; } })();
   const webhookUrl = config.KCS_HQ_WEBHOOK_URL || webhooks['KCS本部'] || Object.values(webhooks)[0];
   
   if (!webhookUrl) {
@@ -2092,36 +2115,72 @@ function morningBriefing() {
   
   // 各種データの取得
   const projects = cmdProjectSummary() || '進行中のプロジェクト情報なし';
+  const snsStats = getYesterdaySnsStats();
   const attendance = cmdTodayAttendance(config) || '本日出勤のメンバー情報なし';
   const pizza = cmdPizzaStock(config) || '備品・在庫情報なし';
 
   let todayTasks = '';
 
   if (config.GEMINI_API_KEY) {
+    const props = PropertiesService.getScriptProperties();
+    const healthHistoryStr = props.getProperty('KCS_HEALTH_HISTORY') || '[]';
+    const postSnapshotStr = props.getProperty('KCS_LAST_POST_SNAPSHOT') || '{}';
+    
+    let healthSummary = 'ヘルスチェックデータなし';
+    try {
+      const hh = JSON.parse(healthHistoryStr);
+      if (hh.length > 0) healthSummary = `直近のヘルスチェック(${hh[0].ts}): エラー ${hh[0].issues.length}件, 修復 ${hh[0].healed.length}件\n    内容: ${hh[0].issues.join(' / ')}`;
+    } catch(e) {}
+    
+    let postSummary = '投稿データなし';
+    try {
+      const ps = JSON.parse(postSnapshotStr);
+      if (ps.ts) {
+        postSummary = `最終投稿確認(${new Date(ps.ts).toLocaleString()}): \n`;
+        if (ps.snapshot.hal) postSummary += `    HAL: 直近投稿 ${ps.snapshot.hal.count}件\n`;
+        if (ps.snapshot.sunakun) postSummary += `    すなくん: 直近投稿 ${ps.snapshot.sunakun.count}件`;
+      }
+    } catch(e) {}
+
+    const projectKeys = Array.from(new Set([...Object.keys(webhooks), ...Object.keys(channels)])).filter(k => k !== 'KCS本部');
+    const projectTagsDoc = projectKeys.length > 0
+      ? projectKeys.map(k => `[PROJECT:${k}]\n🚀 **【${k}】本日の方向性とアクション**\n...（${k} プロジェクトに関する本日の具体的な指示や確認事項）\n[/PROJECT]`).join('\n\n')
+      : '';
+
     const briefContext =
       `KCS合同会社の朝礼（朝会）です。\n` +
       `本日の日付：${today}\n\n` +
       `【現状データ】\n` +
+      `- システムヘルス状況：\n${healthSummary}\n\n` +
+      `- SNS自動投稿状況：\n${postSummary}\n\n` +
+      `- 昨日のSNS運用実績（マーケティング＆ブランディング班分析用）：\n    投稿数: ${snsStats.count}件\n    いいね数: ${snsStats.likes}\n    インプレッション: ${snsStats.impressions}\n\n` +
       `- プロジェクト状況：\n${projects}\n\n` +
       `- メンバー稼働状況：\n${attendance}\n\n` +
       `- 備品・在庫（ピザ等）状況：\n${pizza}\n\n` +
       `上記のデータを踏まえ、以下のKCS合同会社のAIスタッフ（ジュン専務、サクラ秘書、ハルキ、アカリ）が本日のアクションプランについてディスカッションを行い、最後に本日の具体的なアクションプランをまとめて提示するDiscord用の投稿を作成してください。\n\n` +
+      `【WEB検索の実行指示】\n` +
+      `必ず「WEB検索（googleSearchツール）」を使用して、現在の世の中のトレンドや、KCSのプロジェクトに関連するキーワード（AI技術、ガジェット、アパレル、バーチャルインフルエンサー等）の最新ニュース・トレンドを1〜2件検索してください。そして、そのトレンドを本日の各キャラクターのアクションやSNS戦略に組み込んで提案してください。\n\n` +
       `【登場スタッフ】\n` +
-      `- ジュン専務（統括、しっかり者、標準語でスマートに話す知性派。プロジェクトの進捗や遅れを的確に指摘し、チームを導く愛情深いリーダー）\n` +
+      `- ジュン専務（統括、しっかり者、標準語でスマートに話す知性派。プロジェクトの進捗や遅れ、システムエラーを的確に指摘し、チームを導く愛情深いリーダー）\n` +
       `- サクラ秘書（おっとり、丁寧、社長やメンバーを細やかにサポート。朝礼の司会と最後のまとめ役）\n` +
       `- ハルキ（プランナー、論理的、冷静沈着。ガントチャートやマイルストーンをベースに現実的な計画を立てる）\n` +
-      `- アカリ（プロデューサー、クリエイティブ、トレンドに敏感。アイデアやデザイン、対外的なブランド力を高める視点で発言する）\n\n` +
+      `- アカリ（プロデューサー、クリエイティブ、トレンドに敏感。WEB検索で見つけたトレンドを取り入れ、対外的なブランド力を高める視点で発言する）\n\n` +
       `【ディスカッションの流れ】\n` +
-      `1. サクラ秘書が司会として本日の朝礼の開始と、現状サマリー（プロジェクト・メンバー稼働・在庫）を報告。\n` +
-      `2. ジュン専務が現状の問題点や本日の重要なポイントを厳しくも熱く指摘し、ハルキやアカリに意見を求める。\n` +
-      `3. ハルキやアカリがそれぞれの専門的な視点（計画、アイデア）から本日の具体的な動きについて提案する。\n` +
-      `4. ジュン専務が本日の目標を熱く締めくくり、メンバー全員を鼓舞する。\n` +
+      `1. サクラ秘書が司会として本日の朝礼の開始と、現状サマリー（ヘルス状況・プロジェクト・稼働）を報告。\n` +
+      `2. アカリがWEB検索で見つけた最新のトレンドニュースを発表し、SNSやプロジェクトへの活用アイデアを出す。\n` +
+      `3. ジュン専務がシステムエラーの状況やプロジェクトの遅れに触れつつ、ハルキに具体的な進行計画を求める。\n` +
+      `4. ハルキが具体的な動きを提案し、ジュン専務が熱く全体を締めくくる。\n` +
       `5. 最後にサクラ秘書が「本日の具体的なアクションプラン（やること）」を箇条書きで分かりやすく整理してまとめる。\n\n` +
       `【出力ルール】\n` +
+      `各プロジェクト固有の報告部屋があるため、出力を必ず以下のタグフォーマットで分割してください。\n\n` +
+      `[MAIN]\n` +
+      `🤖 **KCS AIスタッフ朝礼ディスカッション (WEBトレンド分析機能搭載)**\n` +
+      `（これまでの全体ディスカッションと本日の全体まとめ。必ず1200文字以上の十分なボリュームでディスカッションすること）\n` +
+      `[/MAIN]\n\n` +
+      (projectTagsDoc ? projectTagsDoc + `\n\n` : '') +
       `- ユーザーに分かりやすい親切な日本語であること。\n` +
       `- Discordのマークダウン（太字や絵文字など）を効果的に使用し、読みやすくレイアウトすること。\n` +
-      `- 全体で1200〜1800文字程度に収めること。\n` +
-      `- 冒頭に「🤖 **KCS AIスタッフ朝礼ディスカッション**」と記述すること。`;
+      `- JSONやMarkdownコードブロックで全体を囲まないこと。生テキストとしてタグを出力すること。`;
 
     try {
       const apiKey = config.GEMINI_API_KEY;
@@ -2133,7 +2192,8 @@ function morningBriefing() {
           muteHttpExceptions: true,
           payload: JSON.stringify({
             contents: [{ role: 'user', parts: [{ text: briefContext }] }],
-            generationConfig: { maxOutputTokens: 2500, temperature: 0.7 }
+            tools: [{ googleSearch: {} }],
+            generationConfig: { maxOutputTokens: 8192, temperature: 0.7 }
           })
         }
       );
@@ -2171,17 +2231,83 @@ function morningBriefing() {
     ].join('\n');
   }
 
-  try {
-    UrlFetchApp.fetch(webhookUrl, {
-      method: 'POST',
-      contentType: 'application/json',
-      muteHttpExceptions: true,
-      payload: JSON.stringify({ content: todayTasks, username: 'KCS AIスタッフ朝礼' })
-    });
-    console.log('[morningBriefing] AIスタッフ協働朝礼送信完了');
-  } catch (e) {
-    console.error('[morningBriefing] 送信失敗:', e.message);
+  // 送信ユーティリティ（チャンク分割）
+  const sendToWebhook = (url, text) => {
+    if (!url || !text) return;
+    try {
+      const limit = 1900;
+      let str = text;
+      while (str.length > 0) {
+        if (str.length <= limit) {
+          const resWH = UrlFetchApp.fetch(url, {
+            method: 'POST',
+            contentType: 'application/json',
+            muteHttpExceptions: true,
+            payload: JSON.stringify({ content: str, username: 'KCS AIスタッフ朝礼' })
+          });
+          if (resWH.getResponseCode() >= 400) console.warn('Webhook送信失敗:', resWH.getContentText());
+          break;
+        }
+        let splitIndex = str.lastIndexOf('\n', limit);
+        if (splitIndex === -1 || splitIndex < limit * 0.7) splitIndex = limit;
+        const chunk = str.slice(0, splitIndex);
+        str = str.slice(splitIndex);
+        const resWH = UrlFetchApp.fetch(url, {
+          method: 'POST',
+          contentType: 'application/json',
+          muteHttpExceptions: true,
+          payload: JSON.stringify({ content: chunk, username: 'KCS AIスタッフ朝礼' })
+        });
+        if (resWH.getResponseCode() >= 400) console.warn('Webhook送信失敗:', resWH.getContentText());
+        Utilities.sleep(1000);
+      }
+    } catch (e) {
+      console.error('[morningBriefing] Webhook送信処理エラー:', e.message);
+    }
+  };
+
+  let mainText = '';
+  const projectTexts = {};
+
+  if (!todayTasks || todayTasks.indexOf('[MAIN]') === -1) {
+    // タグ形式でない場合はすべてメインとして扱う
+    mainText = todayTasks;
+  } else {
+    // 取得したテキストをタグでパースする
+    const mainMatch = todayTasks.match(/\[MAIN\]([\s\S]*?)\[\/MAIN\]/i);
+    if (mainMatch) {
+      mainText = mainMatch[1].trim();
+    } else {
+      mainText = todayTasks.trim(); // タグがない場合は全てメインに
+    }
+
+    const projectRegex = /\[PROJECT:([^\]]+)\]([\s\S]*?)\[\/PROJECT\]/gi;
+    let m;
+    while ((m = projectRegex.exec(todayTasks)) !== null) {
+      projectTexts[m[1].trim()] = m[2].trim();
+    }
   }
+
+  // メインチャンネル送信
+  sendToWebhook(webhookUrl, mainText);
+
+  // 個別プロジェクト送信
+  const botToken = config.DISCORD_BOT_TOKEN;
+  for (const [projName, projContent] of Object.entries(projectTexts)) {
+    const pUrl = webhooks[projName];
+    const pChannelId = channels[projName];
+    if (pUrl) {
+      sendToWebhook(pUrl, projContent);
+    } else if (pChannelId && botToken) {
+      // Webhookがない場合はBot API経由で直接チャンネルに送信する
+      sendDiscordMessage(pChannelId, projContent, botToken);
+    } else {
+      console.warn(`[morningBriefing] Webhook URLもChannel IDも見つかりません: ${projName}`);
+    }
+  }
+
+  console.log('[morningBriefing] プロジェクト別朝礼配信完了');
+  return `[Success] メイン朝礼(${mainText.length}文字) と ${Object.keys(projectTexts).length}件のプロジェクト別配信を完了しました`;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2411,7 +2537,8 @@ function cmdPizzaStock(config) {
     const data = JSON.parse(res.getContentText());
     const products = Array.isArray(data) ? data : (data.products || []);
     const inStock = products.filter(p => p.stock === 'inStock' || p.inStock === true).length;
-    return `🍕 **Pizza在庫状況**\n在庫あり: ${inStock}件 / 全${products.length}件`;
+    const unknownStock = products.filter(p => p.stock === 'unknown').length;
+    return `🍕 **Pizza在庫状況**\n在庫あり: ${inStock}件 / 全 / 不明(取得エラー等): ${unknownStock}件 / 全${products.length}件`;
   } catch (e) { return `❌ 取得エラー: ${e.message}`; }
 }
 
@@ -2438,6 +2565,11 @@ function setupAllTriggers() {
   if (!existing.includes('generateDailyReport')) {
     ScriptApp.newTrigger('generateDailyReport').timeBased().atHour(20).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
     created.push('generateDailyReport (毎日20時)');
+  }
+  // HAL自動投稿（毎日10時 JST）— GAS OAuth1.0a直接投稿
+  if (!existing.includes('autoPostHAL')) {
+    ScriptApp.newTrigger('autoPostHAL').timeBased().atHour(10).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
+    created.push('autoPostHAL (毎日10時)');
   }
   // すなくんAmazonアフィリエイト自動投稿（毎日12時）
   if (!existing.includes('autoPostAffiliateAmazon')) {
@@ -2643,7 +2775,7 @@ function callClaudeAPI(userPrompt, systemPrompt, model) {
     console.warn('[Claude] CLAUDE_API_KEY が未設定');
     return null;
   }
-  const m = model || 'claude-haiku-4-5-20251001';
+  const m = model || 'claude-3-5-haiku-20241022';
   try {
     const res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
       method: 'post',
@@ -2760,9 +2892,10 @@ function generateHALPost(data) {
       `このキャラで投稿文を3パターン作成してください。\n` +
       `【必須】各パターンは日本語＋繁體字中国語の両方を含めてください（簡体字禁止）。\n` +
       `【必須】hashtagsには#を付けないでください（コード側で自動付与します）。\n` +
+      `【必須】JSONの値の中に改行を含める場合は、必ず \\n にエスケープしてください。生の改行は含めないでください。\n` +
       `返答はJSON形式のみで（前置き・説明・返事等の会話文は一切不要）：{"pattern1":"...","pattern2":"...","pattern3":"...","hashtags":["タグ1","タグ2"]}`;
 
-    const result = callClaudeAPI(userPrompt, systemPrompt, 'claude-sonnet-4-6');
+    const result = callClaudeAPI(userPrompt, systemPrompt, 'claude-3-7-sonnet-20250219');
     let parsed;
     if (result) {
       // extractPostJsonFromAi は "post" キーを探すため、HAL用に直接パース
@@ -2926,7 +3059,7 @@ function setupHALTieupSheet() {
   if (!brandSheet) {
     brandSheet = ss.insertSheet('HAL_タイアップ');
     const headers = [['ブランドID', 'ブランド名', 'カテゴリ', 'ブランド説明', 'HP URL', 'EC URL', '有効(TRUE/FALSE)']];
-    const sample  = [['mimomi', 'MIMOMI', 'アパレル', 'HALが公式タイアップモデルを務めるアパレルブランド', '', '', 'TRUE']];
+    const sample  = [['sample', 'SampleBrand', 'アパレル', 'HALが公式タイアップモデルを務めるアパレルブランド', '', '', 'TRUE']];
     brandSheet.getRange(1, 1, 1, 7).setValues(headers).setFontWeight('bold');
     brandSheet.getRange(2, 1, 1, 7).setValues(sample);
     brandSheet.setFrozenRows(1);
@@ -3247,7 +3380,7 @@ function generateSunakkunPost(data) {
       `- HAL へのライバル意識を微妙に含む（「また負けてる…」など）\n\n` +
       `返答JSON形式（前置き・説明・返事等の会話文は一切不要）：{"post":"投稿文","hashtags":["タグ"],"link":"アフィリエイトリンク"}`;
 
-    const result = callClaudeAPI(userPrompt, SUNAKKUN_SYSTEM_PROMPT, 'claude-sonnet-4-6');
+    const result = callClaudeAPI(userPrompt, SUNAKKUN_SYSTEM_PROMPT, 'claude-3-7-sonnet-20250219');
     let parsed;
     if (result) {
       parsed = extractPostJsonFromAi(result);
@@ -3312,6 +3445,50 @@ function generateSunakkunPost(data) {
 
     return { ok: true, post: parsed, postId };
   }, 'generateSunakkunPost');
+}
+
+/**
+ * HAL自動投稿（毎日10:00 GASタイマートリガー / GitHub Actions webhook共用）
+ * generateHALPost で投稿文生成 → postToX('hal') で OAuth1.0a 直接投稿。
+ * FULL_AUTO_MODE に依存しない（タイマートリガー = 常に自動投稿）。
+ */
+function autoPostHAL() {
+  if (isDuplicateRun('autoPostHAL', 30)) return { ok: true, skipped: 'dedup' };
+  return withErrorHandling(function() {
+    console.log('[autoPostHAL] HAL自動投稿を開始');
+    var result = generateHALPost({ theme: '', platform: 'X', useGemini: true });
+    if (!result || !result.ok) {
+      console.log('[autoPostHAL] 投稿文生成失敗: ' + JSON.stringify(result));
+      return { ok: false, error: '投稿文生成失敗', result: result };
+    }
+    if (result.autoPosted) {
+      console.log('[autoPostHAL] FULL_AUTO_MODEで既に投稿済み');
+      return result;
+    }
+    var patterns = result.patterns || {};
+    var text = sliceTwitterText(
+      (patterns.pattern1 || '') + '\n\n' + (Array.isArray(patterns.hashtags) ? patterns.hashtags.join(' ') : ''), 280
+    );
+    if (!text.trim()) {
+      console.log('[autoPostHAL] 投稿テキストが空');
+      return { ok: false, error: '投稿テキスト空' };
+    }
+    var xRes = postToX(text, 'hal');
+    logSnsPost('HAL', 'X', text, xRes.ok ? '自動投稿済み' : 'エラー');
+    console.log('[autoPostHAL] X投稿結果: ' + JSON.stringify(xRes));
+    var config = getKCSSettings();
+    var webhooks = {};
+    try { webhooks = JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}'); } catch(e) {}
+    var halWebhook = webhooks['hal-project'] || webhooks['KCS本部'] || '';
+    if (halWebhook) {
+      if (xRes.ok) {
+        sendDiscordWebhook(halWebhook, '🌸 **[HAL] X自動投稿成功**\n```\n' + text + '\n```', 'KCS Bot');
+      } else {
+        sendDiscordWebhook(halWebhook, '🌸 **[HAL] X投稿失敗 → 手動投稿してください**\n```\n' + text + '\n```\n👆 コピーしてXに貼り付けてください', 'KCS Bot');
+      }
+    }
+    return { ok: xRes.ok, postId: result.postId, patterns: patterns, xResult: xRes };
+  }, 'autoPostHAL');
 }
 
 /**
@@ -3968,14 +4145,15 @@ function sliceTwitterText(text, maxUnits = 280) {
     return text;
   }
   let result = '';
+  const targetUnits = maxUnits - 2; // reserve for '…'
   for (let i = 0; i < text.length; i++) {
     const nextTest = result + text.charAt(i);
-    if (getTwitterLength(nextTest) > maxUnits) {
+    if (getTwitterLength(nextTest) > targetUnits) {
       break;
     }
     result = nextTest;
   }
-  return result;
+  return result + '…';
 }
 
 // X（Twitter）用の正確なバイト換算文字数の取得関数
@@ -4827,16 +5005,11 @@ function handleSlashCommand(body, config) {
     resolved: (body.data && body.data.resolved) ? body.data.resolved : {}
   };
 
-  // すべてのコマンドを同期的に実行し、レスポンスは必ずFollowup Webhookで送信する。
-  // （Cloudflare Workers経由のため、Workerが即座にtype:5を返しており、GASのHTTP返答はDiscordには届かないため）
-  console.log('[Discord] Processing slash command synchronously:', cmd);
-  try {
-    const result = executeSlashAsync(data, config);
-    sendDiscordFollowup(data.appId, data.token, result);
-  } catch (err) {
-    console.error('[Discord] Synchronous slash command error:', err.message);
-    sendDiscordFollowup(data.appId, data.token, `❌ 処理中に予期せぬエラーが発生しました: ${err.message}`);
-  }
+  // Discordの3秒タイムアウトを回避するため、全コマンドを非同期キューに保存し、即座にtype:5を返す。
+  // processQueuedSlashCommand（毎分トリガー）が拾ってFollowupで結果を送信する。
+  console.log('[Discord] Queuing slash command for async processing:', cmd);
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty(`SLASH_${Date.now()}_${Math.floor(Math.random()*10000)}`, JSON.stringify(data));
 
   return discordReply5();
 }
@@ -4920,8 +5093,9 @@ function executeSlashAsync(data, config) {
         return cmdAskGemini(q, config, 'KCS本部') || '⚠️ 回答できませんでした。';
       }
       case 'briefing': {
-        morningBriefing();
-        return '🌅 朝ブリーフィングを実行しました！ #朝礼 を確認してください。';
+        try { setupMorningBriefingTrigger(); } catch(e) { console.warn('Trigger setup failed:', e.message); }
+        const resMsg = morningBriefing(true);
+        return '🚀 朝ブリーフィングを手動実行し、毎朝8時のトリガーも再設定しました！ #朝礼 チャンネルを確認してください。\n' + resMsg;
       }
       case 'hal': {
         const theme = getOpt('theme') || '今日のおすすめ';
@@ -5704,7 +5878,7 @@ function autoReplyTick() {
           const replyDraft = callClaudeAPI(
             `@${username} からの返信:「${replySnippet}」に返信してください。`,
             systemPrompt,
-            'claude-haiku-4-5-20251001'
+            'claude-3-5-haiku-20241022'
           ) || '（返信案の生成に失敗しました）';
 
           // ScriptProperties に承認待ちデータを保存
@@ -5808,13 +5982,13 @@ function engagementTick() {
           ? '先ほどの自分の投稿に追加コメントを1つ書いてください。50文字以内。フォロワーに質問を投げかけて会話を促してください。例:「みんなは最近どんなコーデしてる？教えて〜！」口調はおっとり天然。'
           : '先ほどの自分の投稿に追加コメントを1つ書いてください。50文字以内。フォロワーに質問を投げかけて会話を促してください。例:「みんなはどんなガジェット使ってる？教えて！」口調はカジュアル。';
         const config = getKCSSettings();
-        let selfReply = callClaudeAPI(selfReplyPrompt, '', 'claude-haiku-4-5-20251001');
+        let selfReply = callClaudeAPI(selfReplyPrompt, '', 'claude-3-5-haiku-20241022');
         if (!selfReply) {
           selfReply = cmdAskGemini(selfReplyPrompt, config, account);
           selfReply = String(selfReply).replace(/🤖[^\n]*\n/, '').replace(/```[^`]*```/g, '').trim();
         }
         if (selfReply) {
-          const sr = replyToX(tweetId, selfReply.slice(0, 140), account);
+          const sr = replyToX(tweetId, sliceTwitterText(selfReply, 280), account);
           console.log(`[拡散エンジン] セルフリプライ ${account}:`, sr.ok ? '成功' : sr.error);
         }
 
@@ -5823,13 +5997,13 @@ function engagementTick() {
         const crossPrompt = isHal
           ? `すなくんとして、HALの投稿に友達感覚でコメントしてください。40文字以内。ライバル意識を少し見せつつフレンドリーに。例:「また先越された…でもこのコーデはちょっと認めるわ🤔」`
           : `HALとして、すなくんの投稿に友達感覚でコメントしてください。40文字以内。おっとりした口調で。例:「あ、これ気になってた！すなくんさすがだね〜」`;
-        let crossReply = callClaudeAPI(crossPrompt, '', 'claude-haiku-4-5-20251001');
+        let crossReply = callClaudeAPI(crossPrompt, '', 'claude-3-5-haiku-20241022');
         if (!crossReply) {
           crossReply = cmdAskGemini(crossPrompt, config, otherAccount);
           crossReply = String(crossReply).replace(/🤖[^\n]*\n/, '').replace(/```[^`]*```/g, '').trim();
         }
         if (crossReply) {
-          const cr = replyToX(tweetId, crossReply.slice(0, 140), otherAccount);
+          const cr = replyToX(tweetId, sliceTwitterText(crossReply, 280), otherAccount);
           console.log(`[拡散エンジン] 相互コメント ${otherAccount}→${account}:`, cr.ok ? '成功' : cr.error);
         }
 
@@ -5939,7 +6113,7 @@ function generateTikTokScript(params) {
       `【画面テロップ案】\n（各シーンで表示するテキスト、箇条書き3-5個）\n\n` +
       `【BGM・編集メモ】\n（雰囲気に合うBGM種類・カット割りのメモ）`;
 
-    const script = callClaudeAPI(userPrompt, sysPrompt, 'claude-sonnet-4-6');
+    const script = callClaudeAPI(userPrompt, sysPrompt, 'claude-3-7-sonnet-20250219');
     if (!script) return { ok: false, error: 'Claude API 応答なし' };
 
     const dateStr    = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmm');
@@ -5997,7 +6171,7 @@ function generateNoteOutline(params) {
       `【CTA・まとめ】\n（フォロー・購入・メルマガ登録等の促し）\n\n` +
       `【想定文字数・読了時間】\n（目安）`;
 
-    const outline = callClaudeAPI(userPrompt, sysPrompt, 'claude-sonnet-4-6');
+    const outline = callClaudeAPI(userPrompt, sysPrompt, 'claude-3-7-sonnet-20250219');
     if (!outline) return { ok: false, error: 'Claude API 応答なし' };
 
     const dateStr   = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmm');
@@ -6932,7 +7106,7 @@ function generateNoteFullArticle(params) {
     const sysPrompt = 'あなたは' + charPersona + 'のnote.com有料記事ライターです。読者が「買ってよかった」と思える情報密度の高い記事を書いてください。';
     const userPrompt = '以下のテーマでnote.com有料記事（全文）を執筆してください。\nテーマ: ' + topic + '\n' + (keyword ? 'SEOキーワード: ' + keyword + '\n' : '') + '価格: ' + priceYen + '円\n\n「# タイトル 」で始まり「## はじめに」「## 1.」「## 2.」「## 3.」「## まとめ」の構成で全期1500字以上。最後にXフォローを促すCTA必須。外部URLは本文に直貼り禁止。';
 
-    const article = callClaudeAPI(userPrompt, sysPrompt, 'claude-sonnet-4-6');
+    const article = callClaudeAPI(userPrompt, sysPrompt, 'claude-3-7-sonnet-20250219');
     if (!article) return { ok: false, error: 'Claude API 応答なし' };
 
     // note記事管理シートに保存
@@ -7034,13 +7208,13 @@ function postLeadMagnetTease(account) {
       ? '無料プレゼント告知ツイートを130字以内で書いて。「リンク希望」とリプライした人にお気に入りアイテムリストを送る。言葵はハル口調。文末にリプライ行動を促す文。ハッシュタグなし。'
       : '無料情報プレゼント告知ツイートを130字以内で書いて。「リンク希望」とリプライした人に廢選ガジェット比較シートを送る。カジュアルな口調。文末にリプライ行動を促す文。ハッシュタグなし。';
 
-    let tweetText = callClaudeAPI(userPrompt, sysPrompt, 'claude-haiku-4-5-20251001');
+    let tweetText = callClaudeAPI(userPrompt, sysPrompt, 'claude-3-5-haiku-20241022');
     if (!tweetText) {
       tweetText = isHal
         ? '🎁 このツイートに「リンク希望」ってリプライしてくれた方に、わたしが毎日使ってるお気に入りアイテムリストをお送りします🦳よかったら気軽にリプライしてね🦳'
         : '🎁 このツイートに「リンク希望」ってリプライしてくれた方に、すなくん帳選ガジェット比較シート（2024年版）を無料でプレゼント！欲しい人はリプライどうぞ！';
     }
-    tweetText = sliceTwitterText(tweetText, 140);
+    tweetText = sliceTwitterText(tweetText, 280);
 
     const keys = {
       consumerKey:    isHal ? config.HAL_X_CONSUMER_KEY    : config.X_CONSUMER_KEY,
@@ -8468,6 +8642,7 @@ function getTellerDashboardData(tellerId) {
 const KCS_REQUIRED_TRIGGERS = [
   'morningBriefing',
   'generateDailyReport',
+  'autoPostHAL',
   'autoPostAffiliateAmazon',
   'autoPostAffiliateRakuten',
   'autoReplyTick',
@@ -8773,9 +8948,37 @@ function runSelfHeal(results) {
     } catch(e) { console.warn('[runSelfHeal] トリガー再登録失敗:', e.message); }
   }
   // 2. X投稿コンテンツ汚染 → 削除権限なしのため通知のみ（社長へ手動削除を促す）
-  // 3. Discord webhook 不応答 → リトライ1回
+  // 3. Discord webhook 不応答 → マスターWebhookへのフォールバック自己修復
   if (results.discord && !results.discord.ok) {
-    console.log('[runSelfHeal] Discord webhook 不応答を検知。次サイクルで再チェック。');
+    console.log('[runSelfHeal] Discord webhook 不応答を検知。自己修復（フォールバック）を開始します。');
+    try {
+      const config = getKCSSettings();
+      let webhooks = JSON.parse(config.DISCORD_WEBHOOK_URLS || '{}');
+      // 正常に動いているWebhook、またはKCS本部をマスターとして選定
+      const masterUrl = webhooks['KCS本部'] || webhooks['エラーログ'] || Object.values(webhooks).find(u => u && u.startsWith('http')) || '';
+      
+      let healedCount = 0;
+      if (masterUrl) {
+        results.discord.failed.forEach(f => {
+          // 例: "hal-project(HTTP404)" から "hal-project" を抽出
+          const m = typeof f === 'string' ? f.match(/^([^\(]+)/) : null;
+          if (m && m[1]) {
+            const name = m[1];
+            if (webhooks[name] && webhooks[name] !== masterUrl) {
+              console.log(`[runSelfHeal] Webhook "${name}" をマスターにフォールバックします。`);
+              webhooks[name] = masterUrl;
+              healedCount++;
+            }
+          }
+        });
+      }
+      if (healedCount > 0) {
+        PropertiesService.getScriptProperties().setProperty('DISCORD_WEBHOOK_URLS', JSON.stringify(webhooks));
+        healed.push(`Discord Webhook自己修復(${healedCount}件フォールバック)`);
+      }
+    } catch(e) {
+      console.warn('[runSelfHeal] Discord修復エラー:', e.message);
+    }
   }
   // 4. Gmail監視停止 → gmailMonitorTickをその場で1回叩いて復帰確認
   if (results.gmail && !results.gmail.ok) {
