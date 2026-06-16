@@ -7,7 +7,218 @@
 ---
 
 ## 📅 更新日時
-2026年6月4日（最終更新）— 継続的に更新中
+2026年6月17日（最終更新）— 継続的に更新中
+
+---
+
+## 📋 2026年6月17日の作業（HAL X自動投稿復活・agent-twitter-client完全廃止）
+
+### ✅ 完了した項目
+
+1. **HAL X投稿93時間以上停止の根本原因解明・完全修正**
+   - **原因1**: `agent-twitter-client`（非公式Twitterスクレイパー）がTwitter API変更で"code 34"エラー。ライブラリレベルで壊れており修正不可
+   - **原因2**: HALにはGASタイマートリガーが存在せず、GitHub Actions経由でしか投稿できなかった（→原因1で全滅）
+   - **原因3**: `auto_post_hal` webhookアクションが`FULL_AUTO_MODE`フラグに依存しており、自律投稿がブロックされていた
+
+2. **`.github/workflows/x-auto-post.yml` 完全リライト**
+   - agent-twitter-client/Node.js依存を全廃止
+   - GASに`auto_post_hal`アクションをcurlで直接叩く方式に一本化（GAS側でOAuth1.0a投稿）
+   - すなくんはGASタイマートリガー（12時Amazon/18時楽天）で自律投稿済みのためWFから除外
+   - HAL用cron: 10:00 JST / 15:00 JST
+
+3. **GAS `autoPostHAL()` 関数追加**（`GAS_KCS合同会社_Backend.js`）
+   - `generateHALPost()` → `postToX('hal')` のOAuth1.0a直接投稿パイプライン
+   - すなくんの`autoPostAffiliateRakuten`と同じ実証済みアーキテクチャ
+   - FULL_AUTO_MODEに依存しない（タイマー/webhook共用）
+
+4. **GAS `resetAllTriggers` にHALタイマー追加**
+   - `autoPostHAL`: 毎日10時JST
+   - `KCS_REQUIRED_TRIGGERS` にも追加（ヘルスモニター監視対象）
+
+5. **`auto_post_hal` webhookアクション簡素化**
+   - FULL_AUTO_MODE依存を除去、`autoPostHAL()`を直接呼び出し
+
+6. **`social_poster.py`（MORU用）のPlaywrightバグ修正**
+   - `browser.new_context(user_data_dir=...)` → `launch_persistent_context()` に修正
+   - ツイートボタンセレクタを`tweetButton`と`tweetButtonInline`のデュアルマッチに修正
+
+### ⚠️ デプロイ手順（手動作業必要）
+
+| 手順 | 状態 |
+|---|---|
+| GitHub push（x-auto-post.yml） | ✅ 完了（自動反映） |
+| GASコードのデプロイ | ⏳ GASエディタにコピペまたはclasp push必要 |
+| `resetAllTriggers()` 実行 | ⏳ GASエディタで手動実行してautoPostHALトリガー登録 |
+| HAL OAuth1.0aキー確認 | ⏳ GAS設定SSに`HAL_X_CONSUMER_KEY`等4つが存在するか確認 |
+
+### 📌 アーキテクチャ変更サマリ
+
+| 投稿方式 | 変更前 | 変更後 |
+|---|---|---|
+| HAL X投稿 | GitHub Actions → agent-twitter-client（壊れた） | GASタイマー(10時) + GitHub Actions(10時/15時) → GAS OAuth1.0a直接投稿 |
+| すなくん X投稿 | GitHub Actions → agent-twitter-client（壊れた） | GASタイマー(12時Amazon/18時楽天) → GAS OAuth1.0a直接投稿（変更なし・元から稼働中） |
+| MORU X投稿 | Playwright `social_poster.py` | Playwright `social_poster.py`（バグ修正済み） |
+
+---
+
+## 📋 2026年6月13日の作業（KCSスタッフエージェントシステム構築・もるちゃんDriveパイプライン完成）
+
+### ✅ 完了した項目
+
+1. **KCS自律スタッフエージェントシステム全構築完了**
+   - `staff/coordinator.py`: 全体統括オーケストレーター（日次4ステップ実行）
+   - `staff/hal_coordinator.py`: HAL専用コーディネーター（おっとり天然癒やし系・21歳・台湾ハーフ）
+   - `staff/suna_coordinator.py`: すなくん専用コーディネーター（26歳・男性・元エンジニア・HALのファン）
+   - `staff/moru_coordinator.py`: もる専用コーディネーター（ボストンテリア・YouTubeショート中心）
+   - `staff/knowledge_sync.py`: Obsidian Vault 3パス同期
+   - `staff/content_writer.py`: Claude APIコンテンツ生成
+   - `staff/social_poster.py`: Playwright経由Xブラウザ投稿（post_queue.json キューシステム）
+   - `staff/analytics_agent.py`: パフォーマンス追跡・最適投稿時間分析
+   - `staff/drive_media_agent.py`: DriveからDL→顔スタンプ→バズネタ生成
+
+2. **もるちゃんSNSアカウント接続完了**
+   - X: `@molmol0609` / YouTube: `ボストンテリア[もると]ダイアリー @malmalt_0609`
+   - Discord: `1494812408777150544`
+   - .env に MORU_* 変数追加済み
+   - Drive フォルダID3件（Root/Images/Videos）設定済み
+
+3. **もるちゃんGoogle Drive動画8本ダウンロード・処理完了**
+   - **ダウンロード方式**: Edge（Claude in Chrome MCP）でdrive.usercontent.google.comに直接ナビゲート
+     → Edge の既存Googleセッションを利用（認証設定不要・Cookie復号不要）
+     → ファイルは `C:\Users\kenny\Downloads\` に自動保存
+   - **ダウンロードURL形式**: `https://drive.usercontent.google.com/download?id={ID}&export=download&confirm=t&authuser=0`
+   - 8本すべてを `temp_media/moru/` に移動済み
+   - **顔検出・スタンプ処理**: `drive_media_agent.py` で全8本完了
+     - 日本語パスのOpenCV問題はXMLを一時パスにコピーして解決（`_get_cascade()`）
+     - `faces` 変数初期化バグ修正（5フレームに1回更新→間のフレームで未定義エラー）
+   - **処理済み動画**: `temp_media/moru/processed/` に8本保存
+
+4. **バズネタ8本生成・保存**
+   - `analytics/moru_content_ideas.json` にShortsネタ8種（各動画1ネタ）
+   - 各アイテム: shorts_title / shorts_description / hook_text / edit_memo / x_caption / buzz_reason
+   - パターン: リアクション/あるある/ごはん/イタズラ/驚き顔/お散歩/音楽リアクト/ASMR系
+
+5. **もるちゃんX投稿キュー追加**
+   - 2本を `analytics/post_queue.json` に追加済み
+   - `python staff/social_poster.py flush もる` で投稿実行可能
+
+6. **HAL・すなくんペルソナ修正（前セッション実施）**
+   - HAL: おっとり天然癒やし系・禁止ワード適用・台湾ルーツ・3大弱み
+   - すなくん: 26歳・男性・元エンジニア・ハルのことはライバルというよりファン
+   - すなくんのXの投稿や配信をチェックしている。ハル本人もすなくんを認知している。
+
+### 📌 現在の設定・ファイル状態
+
+| ファイル | 状態 |
+|---|---|
+| `staff/coordinator.py` | ✅ 稼働可能（4ステップ日次ルーティン） |
+| `staff/hal_coordinator.py` | ✅ 正しいHALペルソナ適用済み |
+| `staff/suna_coordinator.py` | ✅ 26歳男性・元エンジニア・ハルファン |
+| `staff/moru_coordinator.py` | ✅ ボストンテリア・Shorts中心 |
+| `staff/drive_media_agent.py` | ✅ 顔隠しバグ修正済み |
+| `staff/drive_downloader.py` | ✅ Edge MCP方式（説明+URLs出力のみ） |
+| `temp_media/moru/` | ✅ 原本8本 |
+| `temp_media/moru/processed/` | ✅ 顔隠し処理済み8本 |
+| `analytics/moru_content_ideas.json` | ✅ バズネタ8件保存済み |
+| `analytics/post_queue.json` | ✅ もる投稿2件キュー待ち |
+
+### 📌 ANTHROPIC_API_KEY について
+
+- Pythonスクリプト用のAPIキーが `.env` にない
+- Claude Codeの環境変数 `ANTHROPIC_API_KEY` はサブプロセスに継承されない
+- 解決策: Claude Code側でコンテンツ生成してJSONに書き込む方式で運用中
+- 完全自動化したい場合: `.env` に `ANTHROPIC_API_KEY=sk-ant-...` を手動追加
+
+### 📌 次回アシスタントへの引き継ぎ
+
+- **もるちゃんX投稿の実行**: `python staff/social_poster.py flush もる`（Edgeが開いて投稿）
+- **日次ルーティン実行**: `python staff/coordinator.py`（全キャラの投稿生成→キュー追加）
+- **新メディア追加時**: DriveフォルダにUP → Edge MCP で download URL を開く → `python staff/drive_downloader.py move` → `python staff/drive_media_agent.py process`
+- **Driveダウンロードは認証不要**: Edge（Claude in Chrome拡張）が動いていれば常に機能する
+
+---
+
+## 📋 2026年6月11日の作業（HAL配信セッティング・完全実装）
+
+### ✅ 完了した項目
+
+1. **LiveAvatarカスタムアバター承認後ID差し替え**
+   - 社長より「承認完了」確認 → `hal_stream_system/.env` の `LIVEAVATAR_AVATAR_ID` を旧プリセット `37c384cc-e572-4bf1-bc2a-02907ffc6521`（Rika）から HAL承認後ID `5b8aa938-c39b-4d82-b2bd-96f6ce392c2a` に更新
+   - `heygen_controller.py` の `create_session_token()` を新IDで実行し、`session_id=75f8ef27-ac71-4f00-8501-0ed5a6c1c630` を取得 → トークン発行成功を確認
+
+2. **HANDOFF_LIVEAVATAR.md 記載の既知バグ2件を修正**
+   - **Port 8765 競合クラッシュ** → `heygen_controller.py` に静的メソッド `_is_port_in_use()` を追加し、`start_ws_server_thread()` で起動前にポート使用中チェック。使用中ならサーバー起動をスキップしログ出力。サーバーループ側にも `OSError` ハンドルを追加。
+   - **OBS StartStream 500エラー** → `obs_controller.py` の `start_streaming()` / `stop_streaming()` に `get_stream_status()` の `output_active` チェックを追加。既に配信中／停止中ならその処理をスキップ。
+
+3. **Gemini 2.5 thinking-mode 起因の `'parts'` KeyError修正（health_checkで発覚）**
+   - `ai_brain.py::generate_response()` の Gemini レスポンスパースを防御化（`candidates` / `content.parts` の空チェック、`finishReason` ログ出力）。
+   - `maxOutputTokens` を 200 → 800 に引き上げ（Gemini 2.5 は内部 thinking tokens を消費するため、低設定だと出力parts自体が空になる）。
+   - `health_check.py` も同じパターンで防御化＋ `maxOutputTokens` を 50 → 400 に。これにより配信中にハルが沈黙するリスクを排除。
+
+4. **配信前ヘルスチェック全項目クリア**
+   - `python health_check.py` 実行結果: GEMINI / ELEVENLABS / OBS_PASSWORD すべてOK、`pytchat / websockets / obsws_python / requests / google.genai` 全パッケージOK、Geminiから「こんにちは！」応答取得、ElevenLabs TTS 16344 bytes 生成成功。
+
+5. **YouTube 専用チャンネル設定（@hal_haru_official / UCPs-NI6w4PLT25XhIwSWZFw）**
+   - 社長より新規開設の YouTube チャンネル「HAL🌸ハル（@hal_haru_official）」共有 → `https://www.youtube.com/@hal_haru_official` から `channelId = UCPs-NI6w4PLT25XhIwSWZFw` を抽出
+   - `hal_stream_system/.env` に `YOUTUBE_CHANNEL_ID` / `YOUTUBE_CHANNEL_HANDLE` を追加
+   - `YT_STREAM_KEY` はテスト値のまま残置（本番は YouTube Studio で都度生成しOBS直接入力＝コードに保持しない方針）
+   - `youtube_comment_receiver.py` は既存実装で `YOUTUBE_CHANNEL_ID` を読み、`https://www.youtube.com/channel/<ID>/live` から現行ライブの videoId を自動抽出する仕組みが既にあるため改修不要
+   - 接続テスト: チャンネルID読込OK、`get_live_video_id()` 実行 → 現在ライブ非配信のため None 返却（正常動作）
+
+### 📌 配信プラットフォーム運用ポリシー（社長確認済み）
+
+- **時間帯で YouTube / 17LIVE を使い分け**（具体的時間帯は今後決定）
+- YouTube起動: `python main.py --live`（video_id 省略可、チャンネルから自動検出）
+- 17LIVE起動: `python main.py --17live`
+- 現状の `scheduler.py` は OBS の `start/stop_streaming` を時刻でトリガするのみ。時間帯別にプラットフォームを切り替える拡張は、具体的なシフト時間が決まり次第対応（無計画な拡張は CLAUDE.md の路線厳守ルールに反するため保留）。
+
+### 📌 次回アシスタントへの引き継ぎ
+
+- **配信コードは稼働可能状態**: `main.py` の単体起動準備は完了。あとはOBS Studioを起動してWebSocket 4455を待ち受けにし、`main.py --17live` または `main.py --live`（video_id省略でチャンネルから自動検出）を叩けば配信ループが立ち上がる。
+- **OBS手動セットアップは未着手**: 17LIVEでの本番配信時は社長側で
+  1. `https://jp.17.live` で PUSH URL / Push Key を発行
+  2. OBS「設定→配信→カスタム」に入力
+  3. 17LIVE公式OBSプラグイン導入（コメント/ギフト表示）
+  4. シーン `HAL_待機` `HAL_考え中` `HAL_トーク` の整備
+  が必要（`OBS_17LIVE_HAL_配信構成指示書.md` 参照）。
+- **Hedraリップシンク（hedra_lipsync.py）は未実装**: 17LIVE構成指示書のTODOに残るが、まずは LiveAvatar カスタムアバターでの口パクで動作確認可能。
+- **`live17_comment_receiver.py` のDOMセレクタ実機検証**: 17LIVE配信開始時にChrome 9222起動状態で実セレクタを確認する必要あり。
+
+---
+
+## 📋 2026年6月4日の主要作業③（GitHub Actions X投稿エンジン）
+
+### ✅ 完了した項目
+
+1. **GitHub Actions `x-auto-post.yml` ワークフロー作成・push済み**
+   - 毎日4回スケジュール: HAL(01:00/06:00 UTC = 10時/15時 JST) + すなくん(03:00/09:00 UTC = 12時/18時 JST)
+   - `workflow_dispatch`で手動実行・アカウント選択可能
+   - **アーキテクチャ**: GitHub Actions → GASに命令 → GASがOAuth2でX投稿
+   - OAuth問題は回避（GASの既存OAuth2セッションを利用）
+
+2. **GAS: 新アクション追加（未デプロイ）**
+   - `auto_post_affiliate_amazon` / `auto_post_affiliate_rakuten` → 各自動投稿関数呼び出し
+   - `auto_post_hal` → HAL投稿案生成（FULL_AUTO_MODE=TRUEで自動投稿）
+   - `getXOAuthToken` → OAuth2トークン取得（GitHub Actions OAuth直接投稿用・将来利用）
+
+3. **GitHub Secrets にX APIキーを全登録済み**
+   - `X_CONSUMER_KEY/SECRET/ACCESS_TOKEN/SECRET` (すなくん用)
+   - `HAL_X_CONSUMER_KEY/SECRET/ACCESS_TOKEN/SECRET` (HAL用)
+
+4. **scripts/x_post.mjs** (将来のOAuth1.0a直接投稿用として保存)
+5. **scripts/extract_tweet.mjs** (GASレスポンスからツイートテキスト抽出)
+
+### 📌 重要: X投稿を完全自動化するには社長の対応が必要
+
+**GASをデプロイすること（最優先）:**
+```
+GASエディター → デプロイ → 既存のデプロイを管理 → 鉛筆 → 新バージョン → デプロイ
+```
+デプロイ後は `auto_post_affiliate_rakuten`, `auto_post_hal` アクションが有効になる。
+
+**X OAuth2セッションの状態確認:**
+- GASのOAuth2トークンは2時間で期限切れ（refresh tokenで自動更新）
+- もしX投稿が失敗する場合は `?action=auth&account=sunakun` にアクセスして再認証
 
 ---
 
@@ -572,3 +783,35 @@
      - 配信レイアウト設計（OBS + AITuber OnAir）
      - ブランド資料（MIMOMI アパレル）のビジュアルプロトタイプ
    - **状態**: HAL 投稿が画像生成未搭載のため、今後の拡張対象
+
+
+## 2026-06-04
+- HAL自律配信システム（Python + OBS WebSocket）の初期構築（プロトタイプ）を実施
+- 17LIVE向けのAndroid仮想カメラ連携マニュアルを作成
+- PCスペック（Ryzen 5 / 32GB / GT 1030）を考慮し、軽量化ベースのスクリプト構成に決定
+
+- Google Flow (Veo 2.0) APIを組み込んだ自動動画生成スクリプト generate_flow_video.py を実装し、認証付きダウンロードエラーを解消して 1.2MB の MP4 動画の自動生成と保存に成功
+
+- GASのAPI拡張およびGoogle Drive連携により、ハルのイメージ画像13枚をローカルの temp_media/hal_images/ へ一括ダウンロード完了
+
+## 2026-06-07
+- **X API 連携の修復およびハイブリッド自動投稿システムの実装**
+  - **新規投稿 (`postToX`) の改修**: APIキーによる直接投稿（OAuth 1.0a）➡️ OAuth 2.0 ➡️ Make.com Webhook の3段階の自動フォールバック構成に刷新。Xの有料プラン（クレジットカード支払い済み）のキー情報が設定にあれば、OAuth 1.0a経由で安定して直接投稿されます。
+  - **自動返信 (`replyToX`) の改修**: OAuth 1.0a直接返信を優先し、失敗時はOAuth 2.0にフォールバックするよう改修。キーのねじれバグ（ハルとすなくんのキー交差）を完全に修復しました。
+  - **GAS構文エラーの解消**: 重複して二重定義されていた `generateHALPost` 関数（行1238）および `getYouTubeChannelStats` 関数（行3515）のモック定義を削除し、GASプロジェクト全体の構文パースエラーを解消しました。
+  - **デプロイの完了**: `clasp push -f` により、修正後のコードをGAS本番プロジェクトへデプロイ完了。
+- **ハルのユーチューブライブ自動配信用コメント自動応答システムの設定**
+  - **コメント受信機能の追加 (`youtube_comment_receiver.py`)**: チャンネルIDから現在配信中のライブ動画を自動検知する機能、および `pytchat` を用いてチャットコメントをリアルタイムに受信し、AI頭脳（`AIBrain`）に渡して自動音声応答とOBSシーン（感情モーション）の切り替えをトリガーする仲介スクリプトを新規作成しました。
+  - **メインプログラム (`main.py`) の修正**: コマンドライン引数 `--live` による「ユーチューブライブモード」と、自動でダミーコメントを生成する「テストデモモード」の双方の起動に対応させました。
+  - **依存関係の追加**: `requirements.txt` に `pytchat` を追加。
+  - **配信自動化（一括起動）の設定**: プロジェクトのルートに「ハル_配信システム一括起動.bat」を新規作成しました。このバッチファイルをダブルクリックするだけで、オービーエス（OBS）の起動とPython配信システムの本番モード（`main.py --live`）を一括で立ち上げることができます。また、配信システムの本番起動時にオービーエス（OBS）の配信開始（ストリーミング開始）を自動で実行する機能を追加しました。
+
+## 2026-06-11
+- **X自動投稿におけるAI会話混入バグの修正**
+  - **プロンプトの修正**: `SUNAKKUN_SYSTEM_PROMPT` および `HAL_SYSTEM_PROMPT` において、AI会話（「はい、承知いたしました」など）を絶対に出力せず、JSONのみを出力するように厳格な制約を追加。
+  - **X投稿生成関数の修正**: `generateSunakkunPost` と `generateHALPost` の `userPrompt` 内で「前置き・説明・返事等の会話文は一切不要」と明記。
+  - **クレンジング処理 (`sanitizePostText`) の強化**: AIが万が一会話テキストを出力した場合や、`---`（水平線）や `**`（太字）、`「」`（括弧）で囲んだ場合のクレンジング・抽出ロジックを追加し、純粋な投稿本文のみを確実に抽出・投稿する多層防御を実装。
+  - **デプロイの完了**: `clasp push -f` によりGAS本番環境へ反映。
+- **Xアルゴリズム最適化に伴うリンク投稿方式の改修**
+  - **セルフリプライ方式の採用**: エックスの新アルゴリズム（Grok 2026）では、投稿本文に外部リンクを直接貼るとインプレッションが大幅に減少するため、投稿本文（親ツイート）にはリンクを含めない仕様を徹底。
+  - **自動／手動投稿の改修**: 自動投稿（`autoPostAffiliateAmazon` / `autoPostAffiliateRakuten`）および手動承認投稿（`approveHALPost`）において、新規投稿が成功した直後に、アフィリエイトリンクをぶら下げるセルフリプライ（返信）を自動的に即座に投稿するロジックを実装。これにより、親ツイートの拡散力を維持したまま商品リンクへの誘導が可能になりました。
