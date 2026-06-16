@@ -2,13 +2,15 @@
  * KCS X自動投稿スクリプト（GitHub Actions用）
  * agent-twitter-client を使用（X APIクレジット不要）
  *
- * 2つの認証方式に対応:
+ * 認証方式（優先順）:
+ * 方式0: キャッシュ済みセッションCookie（再ログインによるBOT検知/レート制限回避）
  * 方式1: OAuth 1.0a キー（loginWithV2）— APIクレジット不要
  * 方式2: ユーザー名+パスワード+メール（login）— フォールバック
  */
 
 import { Scraper } from 'agent-twitter-client';
 import fs from 'fs';
+import path from 'path';
 
 const account   = process.env.X_ACCOUNT || 'sunakun';
 const tweetText = process.env.TWEET_TEXT || '';
@@ -19,6 +21,9 @@ if (!tweetText.trim()) {
 }
 
 const isHal = account === 'hal';
+
+const COOKIE_DIR = '.x-cookies';
+const COOKIE_FILE = path.join(COOKIE_DIR, `${account}.json`);
 
 // 文字数チェック
 function countTwitterChars(text) {
@@ -37,6 +42,37 @@ console.log(`投稿内容:\n${tweetText}\n`);
 function setOutput(key, value) {
   if (process.env.GITHUB_OUTPUT) {
     fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+  }
+}
+
+function saveCookies(scraper) {
+  try {
+    fs.mkdirSync(COOKIE_DIR, { recursive: true });
+    // tough-cookie の Cookie オブジェクト配列 → 文字列配列で保存
+    return scraper.getCookies().then((cookies) => {
+      const serialized = cookies.map((c) => c.toString());
+      fs.writeFileSync(COOKIE_FILE, JSON.stringify(serialized, null, 2));
+      console.log(`💾 セッションCookieを保存しました (${serialized.length}件)`);
+    });
+  } catch (e) {
+    console.warn('⚠️ Cookie保存に失敗:', e.message);
+    return Promise.resolve();
+  }
+}
+
+async function tryLoginWithCookies(scraper) {
+  if (!fs.existsSync(COOKIE_FILE)) return false;
+  console.log('🔑 方式0: キャッシュ済みセッションCookieでログイン...');
+  try {
+    const cookies = JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf-8'));
+    if (!Array.isArray(cookies) || cookies.length === 0) return false;
+    await scraper.setCookies(cookies);
+    const ok = await scraper.isLoggedIn();
+    console.log(ok ? '✅ Cookieログイン成功（再ログイン回避）' : '❌ Cookieログイン失敗（期限切れの可能性）');
+    return ok;
+  } catch (e) {
+    console.error('❌ Cookieログインエラー:', e.message?.slice(0, 200));
+    return false;
   }
 }
 
@@ -85,8 +121,14 @@ async function tryLoginWithPassword(scraper) {
 try {
   const scraper = new Scraper();
 
+  // 方式0: キャッシュ済みCookie（最優先・再ログイン頻度を下げてBOT検知を回避）
+  let loggedIn = await tryLoginWithCookies(scraper);
+  let usedCache = loggedIn;
+
   // 方式1: OAuth 1.0a キー
-  let loggedIn = await tryLoginWithKeys(scraper);
+  if (!loggedIn) {
+    loggedIn = await tryLoginWithKeys(scraper);
+  }
 
   // 方式2: ユーザー名+パスワード+メール
   if (!loggedIn) {
@@ -95,8 +137,17 @@ try {
 
   if (!loggedIn) {
     console.error('❌ 全てのログイン方式が失敗しました');
+    // キャッシュが古くて無効だった場合は削除し、次回は新規ログインから始める
+    if (usedCache === false && fs.existsSync(COOKIE_FILE)) {
+      try { fs.unlinkSync(COOKIE_FILE); } catch (e) {}
+    }
     setOutput('success', 'false');
     process.exit(1);
+  }
+
+  // 新規ログイン（Cookie未使用）で成功した場合はCookieを保存して次回以降の再ログインを回避
+  if (!usedCache) {
+    await saveCookies(scraper);
   }
 
   // ツイート投稿
@@ -114,9 +165,15 @@ try {
     if (tweetId) console.log(`🔗 https://x.com/i/web/status/${tweetId}`);
     setOutput('tweet_id', tweetId);
     setOutput('success', 'true');
+    // 投稿成功時にも最新Cookieを保存しなおす（CSRFトークン等の更新を反映）
+    await saveCookies(scraper);
   } else {
     console.error(`❌ X投稿失敗 (HTTP ${result.status})`);
     try { console.error('Response:', (await result.text()).slice(0, 500)); } catch (e) {}
+    // 投稿自体が失敗した場合、Cookieが原因の可能性があるため破棄して次回は再ログインさせる
+    if (usedCache && fs.existsSync(COOKIE_FILE)) {
+      try { fs.unlinkSync(COOKIE_FILE); } catch (e) {}
+    }
     setOutput('success', 'false');
     process.exit(1);
   }
