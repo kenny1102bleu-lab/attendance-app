@@ -85,6 +85,16 @@ jobs:
             echo "TWEET_EOF" >> $GITHUB_OUTPUT
           fi
 
+      # 前回ログイン成功時のセッションCookieを復元（再ログイン頻度を下げてX側のBOT検知/エラーを回避）
+      - name: Restore X session cookies
+        id: cookie-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .x-cookies
+          key: x-cookies-${{ steps.params.outputs.account }}-${{ github.run_id }}
+          restore-keys: |
+            x-cookies-${{ steps.params.outputs.account }}-
+
       # agent-twitter-client でX投稿（APIクレジット不要）
       - name: Post to X
         id: post
@@ -109,6 +119,14 @@ jobs:
           X_ACCOUNT: ${{ steps.params.outputs.account }}
           TWEET_TEXT: ${{ steps.generate.outputs.text }}
         run: node scripts/x_post.mjs
+
+      # 新しいセッションCookieを保存（次回実行時の再ログインを回避）
+      - name: Save X session cookies
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .x-cookies
+          key: x-cookies-${{ steps.params.outputs.account }}-${{ github.run_id }}
 
       # 結果をGASに報告 → Discord通知
       - name: Report to GAS
