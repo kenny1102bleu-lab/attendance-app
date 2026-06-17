@@ -524,9 +524,11 @@ function doPost(e) {
       };
       return jsonResponse({ status: 'ok', keys: report });
     }
-    // _placeholder_
-    if (false) {
-      return jsonResponse({ status: 'ok', echoed: body });
+    if (body && body.action === 'delete_tweet') {
+      return jsonResponse(deleteXTweet(body.tweetId, body.account || 'hal'));
+    }
+    if (body && body.action === 'deactivate_tieup_brand') {
+      return jsonResponse(deactivateTieupBrand(body.brandId || body.brand_id));
     }
 
     // ── Discord 返信テスト ──
@@ -1391,7 +1393,7 @@ function getTrendInfo(dateStr) {
         'ガジェット: 新型スマートウォッチ発表',
         'アニメ: 新作アニメ放送開始'
       ],
-      hashtags: ['#推し活爆発', '#MIMOMI', '#新人モデル'],
+      hashtags: ['#推し活爆発', '#おすすめコーデ', '#新人モデル'],
       kpopNews: {
         title: 'LE SSERAFIM 新曲「GOOD BONES」配信開始',
         url: 'https://example.com'
@@ -2811,8 +2813,9 @@ const HAL_SYSTEM_PROMPT = `あなたは実在する２１歳の新人モデル�
 ・HALは「社長」にマネジメントされている新人モデルで、様々な外部ブランドからタイアップのオファーをもらって活動しています。
 ・タイアップブランドはHALを気に入って声をかけてきた外部の会社です。社長やHALの会社のブランドではありません。
 ・HALはタイアップブランドの服や商品を「自分が本当に好きで使っている」スタンスで自然に紹介します（押し売りNG）。
-  良い例:「このミモミのワンピ、着心地よすぎてオフでも着てる〜」
+  良い例:「このワンピ、着心地よすぎてオフでも着てる〜」
   NG例:「ぜひ買ってください！」「PRです！」
+・※タイアップが正式決定するまで、特定ブランド名を投稿に含めないこと。
 ・SNS投稿本文に外部リンクを直接貼ることは禁止（リプ欄・DM誘導）。
 
 【基本属性＆生々しい人間味】
@@ -2967,6 +2970,10 @@ function generateHALPost(data) {
       const autoText = sliceTwitterText(
         `${parsed.pattern1 || ''}\n\n${(parsed.hashtags || []).join(' ')}`, 280
       );
+      if (/mimomi|mimomim|ミモミ/i.test(autoText)) {
+        console.warn('[generateHALPost] MIMOMI言及を検出。投稿ブロック');
+        return { ok: false, error: 'MIMOMI言及ブロック', text: autoText };
+      }
       const xRes = postToX(autoText, 'hal');
       logSnsPost('HAL', 'X', autoText, xRes.ok ? '自動投稿済み' : 'エラー');
       console.log('[generateHALPost] FULL_AUTO_MODE: X自動投稿 =>', xRes.ok);
@@ -3059,7 +3066,7 @@ function setupHALTieupSheet() {
   if (!brandSheet) {
     brandSheet = ss.insertSheet('HAL_タイアップ');
     const headers = [['ブランドID', 'ブランド名', 'カテゴリ', 'ブランド説明', 'HP URL', 'EC URL', '有効(TRUE/FALSE)']];
-    const sample  = [['sample', 'SampleBrand', 'アパレル', 'HALが公式タイアップモデルを務めるアパレルブランド', '', '', 'TRUE']];
+    const sample  = [['sample', 'SampleBrand', 'アパレル', 'タイアップ正式決定後にブランド情報を入力', '', '', 'FALSE']];
     brandSheet.getRange(1, 1, 1, 7).setValues(headers).setFontWeight('bold');
     brandSheet.getRange(2, 1, 1, 7).setValues(sample);
     brandSheet.setFrozenRows(1);
@@ -3071,7 +3078,7 @@ function setupHALTieupSheet() {
   if (!productSheet) {
     productSheet = ss.insertSheet('HAL_商品リスト');
     const headers = [['ブランドID', '商品名', '価格', '商品説明/特徴', 'メモ（HALのおすすめコメント）']];
-    const sample  = [['mimomi', 'MIMOMIホワイトTシャツ', '¥3,980', 'シンプルで合わせやすい定番T。日台どちらの文化にも馴染む上品なシルエット', '「これ着ると一気に今っぽくなるんだよね」とHALが力説']];
+    const sample  = [['sample_brand', 'サンプル商品', '¥3,980', '商品説明を入力', 'HALのおすすめコメントを入力']];
     productSheet.getRange(1, 1, 1, 5).setValues(headers).setFontWeight('bold');
     productSheet.getRange(2, 1, 1, 5).setValues(sample);
     productSheet.setFrozenRows(1);
@@ -3096,8 +3103,9 @@ function getHALTieupProductContext() {
     const productSheet = ss.getSheetByName('HAL_商品リスト');
     if (!brandSheet) return '';
 
+    var BLOCKED_BRANDS = ['mimomi','mimomim','sample'];
     const brands   = brandSheet.getDataRange().getValues().slice(1)
-                       .filter(r => String(r[6]).toUpperCase() === 'TRUE' && r[0] && r[1]);
+                       .filter(r => String(r[6]).toUpperCase() === 'TRUE' && r[0] && r[1] && BLOCKED_BRANDS.indexOf(String(r[0]).toLowerCase()) === -1);
     const products = productSheet ? productSheet.getDataRange().getValues().slice(1).filter(r => r[0] && r[1]) : [];
 
     if (!brands.length) return '';
@@ -3472,6 +3480,10 @@ function autoPostHAL() {
     if (!text.trim()) {
       console.log('[autoPostHAL] 投稿テキストが空');
       return { ok: false, error: '投稿テキスト空' };
+    }
+    if (/mimomi|mimomim|ミモミ/i.test(text)) {
+      console.warn('[autoPostHAL] MIMOMI言及を検出。タイアップ未確定のため投稿ブロック');
+      return { ok: false, error: 'MIMOMI言及ブロック（タイアップ未確定）', text: text };
     }
     var xRes = postToX(text, 'hal');
     logSnsPost('HAL', 'X', text, xRes.ok ? '自動投稿済み' : 'エラー');
@@ -4422,6 +4434,68 @@ function postToXDirect(text, keys, account) {
 
   } catch (e) {
     console.error('[postToXDirect] ' + account + ' 例外:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+function deactivateTieupBrand(brandId) {
+  if (!brandId) return { ok: false, error: 'brandId必須' };
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('HAL_タイアップ');
+  if (!sheet) return { ok: false, error: 'HAL_タイアップシートなし' };
+  var data = sheet.getDataRange().getValues();
+  var deactivated = 0;
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]).toLowerCase() === String(brandId).toLowerCase()) {
+      sheet.getRange(i + 1, 7).setValue('FALSE');
+      deactivated++;
+    }
+  }
+  return { ok: true, deactivated: deactivated, brandId: brandId };
+}
+
+function deleteXTweet(tweetId, account) {
+  if (!tweetId) return { ok: false, error: 'tweetId必須' };
+  account = account || 'hal';
+  var config = getKCSSettings();
+  var consumerKey, consumerSecret, accessToken, accessSecret;
+  if (account === 'hal') {
+    consumerKey = config.HAL_X_CONSUMER_KEY; consumerSecret = config.HAL_X_CONSUMER_SECRET;
+    accessToken = config.HAL_X_ACCESS_TOKEN; accessSecret = config.HAL_X_ACCESS_SECRET;
+  } else {
+    consumerKey = config.X_CONSUMER_KEY; consumerSecret = config.X_CONSUMER_SECRET;
+    accessToken = config.X_ACCESS_TOKEN; accessSecret = config.X_ACCESS_SECRET;
+  }
+  if (!consumerKey || !accessToken) return { ok: false, error: 'OAuthキー未設定' };
+  var deleteUrl = 'https://api.twitter.com/2/tweets/' + tweetId;
+  var nonce = Utilities.getUuid().replace(/-/g, '');
+  var timestamp = Math.floor(Date.now() / 1000).toString();
+  var oauthParams = {
+    oauth_consumer_key: consumerKey, oauth_nonce: nonce,
+    oauth_signature_method: 'HMAC-SHA1', oauth_timestamp: timestamp,
+    oauth_token: accessToken, oauth_version: '1.0'
+  };
+  var paramStr = Object.entries(oauthParams).sort(function(a,b){return a[0]<b[0]?-1:1;})
+    .map(function(e){return encodeURIComponent(e[0])+'='+encodeURIComponent(e[1]);}).join('&');
+  var baseStr = 'DELETE&' + encodeURIComponent(deleteUrl) + '&' + encodeURIComponent(paramStr);
+  var sigKey = encodeURIComponent(consumerSecret) + '&' + encodeURIComponent(accessSecret);
+  var sig = Utilities.base64Encode(Utilities.computeHmacSignature(Utilities.MacAlgorithm.HMAC_SHA_1, baseStr, sigKey));
+  var authHeader = 'OAuth ' + Object.entries(Object.assign({}, oauthParams, {oauth_signature: sig}))
+    .sort(function(a,b){return a[0]<b[0]?-1:1;})
+    .map(function(e){return encodeURIComponent(e[0])+'="'+encodeURIComponent(e[1])+'"';}).join(', ');
+  try {
+    var res = UrlFetchApp.fetch(deleteUrl, {
+      method: 'delete', headers: { 'Authorization': authHeader }, muteHttpExceptions: true
+    });
+    var code = res.getResponseCode();
+    var body = JSON.parse(res.getContentText());
+    if (code === 200 && body && body.data && body.data.deleted) {
+      console.log('[deleteXTweet] 削除成功 tweetId=' + tweetId);
+      return { ok: true, deleted: true, tweetId: tweetId };
+    }
+    console.error('[deleteXTweet] 失敗 code=' + code + ':', res.getContentText());
+    return { ok: false, code: code, error: body };
+  } catch (e) {
     return { ok: false, error: e.message };
   }
 }
