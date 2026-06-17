@@ -3278,11 +3278,21 @@ function sanitizePostText(text) {
   if (!text) return '';
   let s = String(text);
 
-  // ⭐最強パス: 内部に "post":"..." が混入していたら値だけ抜き取って終わり
-  const postValMatch = s.match(/"post"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-  if (postValMatch) {
-    return postValMatch[1]
+  // ⭐最強パス: 内部に "post":"..." や "pattern1":"..." が混入していたら値だけ抜き取る
+  var jsonKeyMatch = s.match(/"(?:post|pattern1|pattern2|pattern3)"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (jsonKeyMatch) {
+    return jsonKeyMatch[1]
       .replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim();
+  }
+  // JSON wrapper全体 { "pattern1": "..." } が丸ごと入っている場合
+  if (s.trim().startsWith('{') && /"pattern[123]"\s*:/.test(s)) {
+    try {
+      var inner = JSON.parse(s);
+      if (inner.pattern1) return String(inner.pattern1).trim();
+    } catch(e) {
+      var m2 = s.match(/"pattern1"\s*:\s*"([\s\S]+)/);
+      if (m2) return m2[1].replace(/["\s}]+$/, '').replace(/\\n/g, '\n').replace(/\\"/g, '"').trim();
+    }
   }
 
   // AIラベル系（cmdAskGeminiの「🤖 **Gemini:**」やモデル自身が付ける「**Gemini:**json」等）
